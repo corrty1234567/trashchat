@@ -1,0 +1,32 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Sender {
+  CHEN
+  ZUO
+}
+
+model Message {
+  id               String    @id @default(cuid())
+  sender           Sender
+  text             String?
+  imageUrl         String?   @map("image_url")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  editedAt         DateTime? @map("edited_at")
+  recalledAt       DateTime? @map("recalled_at")
+  replyToMessageId String?   @map("reply_to_message_id")
+
+  replyTo Message?  @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies Message[] @relation("MessageReplies")
+
+  @@index([createdAt])
+  @@index([replyToMessageId])
+  @@map("messages")
+}
