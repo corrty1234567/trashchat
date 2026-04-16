@@ -15,6 +15,9 @@ type ChatRoomProps = {
 };
 
 const POLLING_INTERVAL_MS = 1500;
+const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 1800;
+const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
 
 function sortMessagesByCreatedAt(messages: Message[]) {
   return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
@@ -47,6 +50,85 @@ function toReplyMessage(message: Message): Message["replyTo"] {
     editedAt: message.editedAt,
     recalledAt: message.recalledAt
   };
+}
+
+function formatFileSize(bytes: number) {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function readImage(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("無法讀取圖片。"));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("圖片壓縮失敗。"));
+        }
+      },
+      "image/jpeg",
+      quality
+    );
+  });
+}
+
+async function compressImage(file: File) {
+  if (file.size <= MAX_SERVER_UPLOAD_BYTES) {
+    return file;
+  }
+
+  if (file.type === "image/gif") {
+    throw new Error(`GIF 圖片太大，目前請使用 ${formatFileSize(MAX_SERVER_UPLOAD_BYTES)} 以下的圖片。`);
+  }
+
+  const image = await readImage(file);
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("瀏覽器無法壓縮圖片。");
+  }
+
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  for (const quality of JPEG_QUALITIES) {
+    const blob = await canvasToBlob(canvas, quality);
+
+    if (blob.size <= MAX_SERVER_UPLOAD_BYTES) {
+      return new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), {
+        type: "image/jpeg",
+        lastModified: Date.now()
+      });
+    }
+  }
+
+  throw new Error(`圖片太大，壓縮後仍超過 ${formatFileSize(MAX_SERVER_UPLOAD_BYTES)}。`);
+}
+
+async function readApiError(response: Response, fallback: string) {
+  const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  return typeof data?.error === "string" ? data.error : fallback;
 }
 
 export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
@@ -158,8 +240,9 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   }
 
   async function uploadImage(file: File) {
+    const uploadFile = await compressImage(file);
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", uploadFile);
 
     const response = await fetch("/api/upload", {
       method: "POST",
@@ -167,7 +250,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     });
 
     if (!response.ok) {
-      throw new Error("圖片上傳失敗");
+      throw new Error(await readApiError(response, "圖片上傳失敗"));
     }
 
     const data = (await response.json()) as { url: string };
