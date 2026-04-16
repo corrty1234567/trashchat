@@ -4,6 +4,7 @@
 
 import clsx from "clsx";
 import { MoreHorizontal } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { LinkifiedText } from "@/components/linkified-text";
 import { LinkPreviewCard } from "@/components/link-preview-card";
 import { getFirstUrl } from "@/lib/links";
@@ -42,6 +43,39 @@ export function MessageBubble({
   const hasStatus = Boolean(message.editedAt && !isRecalled) || Boolean(message.clientStatus);
   const showMeta = showTimestamp || hasStatus;
   const previewUrl = !isRecalled ? getFirstUrl(message.text) : null;
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMenuOpen]);
+
+  function runAction(action: () => void) {
+    setIsMenuOpen(false);
+    action();
+  }
 
   return (
     <article
@@ -123,34 +157,54 @@ export function MessageBubble({
         </div>
 
         {!isClientOnly ? (
-          <details className="relative shrink-0 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-            <summary
-              className="inline-flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-800"
+          <div
+            ref={menuRef}
+            className={clsx(
+              "relative shrink-0 transition",
+              isMenuOpen
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-auto opacity-100 sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100"
+            )}
+          >
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsMenuOpen((current) => !current);
+              }}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-800"
               aria-label="訊息操作"
             >
               <MoreHorizontal size={15} />
-            </summary>
-            <div
-              className={clsx(
-                "absolute bottom-10 z-10 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
-                isOwn ? "right-0" : "left-0"
-              )}
-            >
-              <button type="button" onClick={onReply} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
-                回覆
-              </button>
-              {editable ? (
-                <button type="button" onClick={onEdit} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
-                  編輯
+            </button>
+            {isMenuOpen ? (
+              <div
+                className={clsx(
+                  "absolute bottom-10 z-10 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
+                  isOwn ? "right-0" : "left-0"
+                )}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button type="button" onClick={() => runAction(onReply)} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                  回覆
                 </button>
-              ) : null}
-              {isOwn && !isRecalled ? (
-                <button type="button" onClick={onRecall} className="block w-full rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50">
-                  收回
-                </button>
-              ) : null}
-            </div>
-          </details>
+                {editable ? (
+                  <button type="button" onClick={() => runAction(onEdit)} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                    編輯
+                  </button>
+                ) : null}
+                {isOwn && !isRecalled ? (
+                  <button
+                    type="button"
+                    onClick={() => runAction(onRecall)}
+                    className="block w-full rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50"
+                  >
+                    收回
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </article>
