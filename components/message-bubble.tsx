@@ -4,6 +4,9 @@
 
 import clsx from "clsx";
 import { MoreHorizontal } from "lucide-react";
+import { LinkifiedText } from "@/components/linkified-text";
+import { LinkPreviewCard } from "@/components/link-preview-card";
+import { getFirstUrl } from "@/lib/links";
 import { canEditMessage, formatMessageTime } from "@/lib/time";
 import { getReplyPreview } from "@/lib/messages";
 import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
@@ -12,6 +15,7 @@ type MessageBubbleProps = {
   message: Message;
   currentSender: Sender;
   isHighlighted: boolean;
+  showTimestamp: boolean;
   onReply: () => void;
   onEdit: () => void;
   onRecall: () => void;
@@ -23,6 +27,7 @@ export function MessageBubble({
   message,
   currentSender,
   isHighlighted,
+  showTimestamp,
   onReply,
   onEdit,
   onRecall,
@@ -34,6 +39,9 @@ export function MessageBubble({
   const isClientOnly = Boolean(message.clientStatus);
   const editable = isOwn && !isClientOnly && canEditMessage(message.createdAt, message.recalledAt);
   const hasVisibleContent = !isRecalled && (message.text || message.imageUrl);
+  const hasStatus = Boolean(message.editedAt && !isRecalled) || Boolean(message.clientStatus);
+  const showMeta = showTimestamp || hasStatus;
+  const previewUrl = !isRecalled ? getFirstUrl(message.text) : null;
 
   return (
     <article
@@ -44,79 +52,87 @@ export function MessageBubble({
         isHighlighted && "rounded-lg bg-yellow-100/70 py-2"
       )}
     >
-      <div className={clsx("flex max-w-[86%] flex-col gap-1 sm:max-w-[72%]", isOwn ? "items-end" : "items-start")}>
-        <div className={clsx("flex items-center gap-2 text-xs text-slate-500", isOwn && "flex-row-reverse")}>
-          <span>{isOwn ? "你" : SENDER_LABEL[message.sender]}</span>
-          <span>{formatMessageTime(message.createdAt)}</span>
-          {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
-          {message.clientStatus === "sending" ? <span>傳送中</span> : null}
-          {message.clientStatus === "failed" ? <span className="text-red-600">傳送失敗</span> : null}
-        </div>
+      <div className={clsx("flex max-w-[90%] items-end gap-2 sm:max-w-[78%]", isOwn && "flex-row-reverse")}>
+        <div className={clsx("flex min-w-0 flex-col gap-1", isOwn ? "items-end" : "items-start")}>
+          {showMeta ? (
+            <div className={clsx("flex items-center gap-2 text-xs text-slate-500", isOwn && "flex-row-reverse")}>
+              {showTimestamp ? <span>{isOwn ? "你" : SENDER_LABEL[message.sender]}</span> : null}
+              {showTimestamp ? <span>{formatMessageTime(message.createdAt)}</span> : null}
+              {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
+              {message.clientStatus === "sending" ? <span>傳送中</span> : null}
+              {message.clientStatus === "failed" ? <span className="text-red-600">傳送失敗</span> : null}
+            </div>
+          ) : null}
 
-        <div
-          className={clsx(
-            "rounded-lg px-3 py-2 shadow-sm",
-            isOwn ? "bg-brand text-white" : "bg-white text-ink",
-            message.clientStatus === "sending" && "opacity-75",
-            message.clientStatus === "failed" && "border border-red-200 bg-red-50 text-red-700",
-            isRecalled && "border border-dashed border-slate-300 bg-transparent text-slate-500 shadow-none"
-          )}
-        >
-          {message.replyTo && !isRecalled ? (
-            <button
-              type="button"
-              onClick={() => onQuoteClick(message.replyTo?.id ?? "")}
-              className={clsx(
-                "mb-2 flex w-full min-w-0 items-center gap-2 rounded-md border-l-4 px-2 py-2 text-left text-sm transition",
-                isOwn
-                  ? "border-white/70 bg-white/15 text-white hover:bg-white/20"
-                  : "border-brand bg-slate-50 text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              {message.replyTo.imageUrl && !message.replyTo.recalledAt ? (
+          <div
+            className={clsx(
+              "rounded-lg px-3 py-2 shadow-sm",
+              isOwn ? "bg-brand text-white" : "bg-white text-ink",
+              message.clientStatus === "sending" && "opacity-75",
+              message.clientStatus === "failed" && "border border-red-200 bg-red-50 text-red-700",
+              isRecalled && "border border-dashed border-slate-300 bg-transparent text-slate-500 shadow-none"
+            )}
+          >
+            {message.replyTo && !isRecalled ? (
+              <button
+                type="button"
+                onClick={() => onQuoteClick(message.replyTo?.id ?? "")}
+                className={clsx(
+                  "mb-2 flex w-full min-w-0 items-center gap-2 rounded-md border-l-4 px-2 py-2 text-left text-sm transition",
+                  isOwn
+                    ? "border-white/70 bg-white/15 text-white hover:bg-white/20"
+                    : "border-brand bg-slate-50 text-slate-600 hover:bg-slate-100"
+                )}
+              >
+                {message.replyTo.imageUrl && !message.replyTo.recalledAt ? (
+                  <img
+                    src={message.replyTo.imageUrl}
+                    alt="回覆圖片縮圖"
+                    className="h-9 w-9 shrink-0 rounded-md object-contain"
+                  />
+                ) : null}
+                <span className="min-w-0 truncate">{getReplyPreview(message.replyTo)}</span>
+              </button>
+            ) : null}
+
+            {isRecalled ? (
+              <p className="text-sm italic">{isOwn ? "你已收回一則訊息" : "對方已收回一則訊息"}</p>
+            ) : null}
+
+            {message.imageUrl && !isRecalled ? (
+              <button
+                type="button"
+                onClick={() => onOpenImage(message.imageUrl ?? "")}
+                className="mb-2 block overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
+                aria-label="開啟圖片預覽"
+              >
                 <img
-                  src={message.replyTo.imageUrl}
-                  alt="回覆圖片縮圖"
-                  className="h-9 w-9 shrink-0 rounded-md object-contain"
+                  src={message.imageUrl}
+                  alt="聊天圖片"
+                  className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
                 />
-              ) : null}
-              <span className="min-w-0 truncate">{getReplyPreview(message.replyTo)}</span>
-            </button>
-          ) : null}
+              </button>
+            ) : null}
 
-          {isRecalled ? (
-            <p className="text-sm italic">{isOwn ? "你已收回一則訊息" : "對方已收回一則訊息"}</p>
-          ) : null}
+            {message.text && !isRecalled ? <LinkifiedText text={message.text} isOwn={isOwn} /> : null}
 
-          {message.imageUrl && !isRecalled ? (
-            <button
-              type="button"
-              onClick={() => onOpenImage(message.imageUrl ?? "")}
-              className="mb-2 block overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
-              aria-label="開啟圖片預覽"
-            >
-              <img
-                src={message.imageUrl}
-                alt="聊天圖片"
-                className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
-              />
-            </button>
-          ) : null}
+            {previewUrl ? <LinkPreviewCard url={previewUrl} /> : null}
 
-          {message.text && !isRecalled ? <p className="whitespace-pre-wrap break-words text-[15px] leading-6">{message.text}</p> : null}
-
-          {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
+            {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
+          </div>
         </div>
 
         {!isClientOnly ? (
-          <details className={clsx("relative", isOwn ? "text-right" : "text-left")}>
-            <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white hover:text-slate-800">
+          <details className="relative shrink-0 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+            <summary
+              className="inline-flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-800"
+              aria-label="訊息操作"
+            >
               <MoreHorizontal size={15} />
-              操作
             </summary>
             <div
               className={clsx(
-                "absolute z-10 mt-1 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
+                "absolute bottom-10 z-10 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
                 isOwn ? "right-0" : "left-0"
               )}
             >

@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MessageBubble } from "@/components/message-bubble";
-import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED } from "@/lib/realtime";
+import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
+import { getMessageMinuteKey } from "@/lib/time";
 import { OTHER_SENDER, SENDER_LABEL, type Message, type Sender } from "@/lib/types";
 
 type ChatRoomProps = {
@@ -18,6 +19,8 @@ const POLLING_INTERVAL_MS = 1500;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
+const TYPING_IDLE_MS = 1200;
+const TYPING_EXPIRE_MS = 3200;
 
 function sortMessagesByCreatedAt(messages: Message[]) {
   return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
@@ -140,8 +143,12 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
+  const typingStopTimerRef = useRef<number | null>(null);
+  const otherTypingTimerRef = useRef<number | null>(null);
+  const hasSentTypingRef = useRef(false);
 
   const otherSender = OTHER_SENDER[sender];
 
@@ -180,7 +187,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     return () => {
       isMounted = false;
     };
-  }, [loadMessages]);
+  }, [loadMessages, sender]);
 
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
@@ -200,14 +207,33 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, () => {
       void loadMessages().catch(() => undefined);
     });
+    channel.bind(PUSHER_EVENT_TYPING_CHANGED, (event: { sender: Sender; isTyping: boolean }) => {
+      if (event.sender === sender) {
+        return;
+      }
+
+      if (otherTypingTimerRef.current) {
+        window.clearTimeout(otherTypingTimerRef.current);
+        otherTypingTimerRef.current = null;
+      }
+
+      setIsOtherTyping(event.isTyping);
+
+      if (event.isTyping) {
+        otherTypingTimerRef.current = window.setTimeout(() => setIsOtherTyping(false), TYPING_EXPIRE_MS);
+      }
+    });
 
     return () => {
       window.clearInterval(intervalId);
+      if (otherTypingTimerRef.current) {
+        window.clearTimeout(otherTypingTimerRef.current);
+      }
       channel.unbind_all();
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();
     };
-  }, [loadMessages]);
+  }, [loadMessages, sender]);
 
   useEffect(() => {
     const optimisticImageUrls = optimisticImageUrlsRef.current;
@@ -215,6 +241,20 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     return () => {
       optimisticImageUrls.forEach((url) => URL.revokeObjectURL(url));
       optimisticImageUrls.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const typingStopTimer = typingStopTimerRef.current;
+      const otherTypingTimer = otherTypingTimerRef.current;
+
+      if (typingStopTimer) {
+        window.clearTimeout(typingStopTimer);
+      }
+      if (otherTypingTimer) {
+        window.clearTimeout(otherTypingTimer);
+      }
     };
   }, []);
 
@@ -257,7 +297,54 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     return data.url;
   }
 
+  const sendTypingState = useCallback(
+    async (isTyping: boolean) => {
+      await fetch("/api/typing", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          sender,
+          isTyping
+        })
+      }).catch(() => undefined);
+    },
+    [sender]
+  );
+
+  const handleTypingActivity = useCallback(
+    (isTyping: boolean) => {
+      if (typingStopTimerRef.current) {
+        window.clearTimeout(typingStopTimerRef.current);
+        typingStopTimerRef.current = null;
+      }
+
+      if (!isTyping) {
+        if (hasSentTypingRef.current) {
+          hasSentTypingRef.current = false;
+          void sendTypingState(false);
+        }
+        return;
+      }
+
+      if (!hasSentTypingRef.current) {
+        hasSentTypingRef.current = true;
+        void sendTypingState(true);
+      }
+
+      typingStopTimerRef.current = window.setTimeout(() => {
+        if (hasSentTypingRef.current) {
+          hasSentTypingRef.current = false;
+          void sendTypingState(false);
+        }
+      }, TYPING_IDLE_MS);
+    },
+    [sendTypingState]
+  );
+
   async function handleSubmit(payload: ComposerPayload) {
+    handleTypingActivity(false);
     setIsSending(true);
     setError(null);
 
@@ -451,23 +538,35 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
             還沒有訊息。傳送第一則文字或圖片開始對話。
           </div>
         ) : (
-          messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              currentSender={sender}
-              isHighlighted={highlightedId === message.id}
-              onReply={() => {
-                setEditing(null);
-                setReplyTo(message);
-              }}
-              onEdit={() => handleStartEdit(message)}
-              onRecall={() => void handleRecall(message)}
-              onOpenImage={setLightboxUrl}
-              onQuoteClick={focusMessage}
-            />
-          ))
+          messages.map((message, index) => {
+            const previousMessage = messages[index - 1];
+            const showTimestamp =
+              !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
+
+            return (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                currentSender={sender}
+                isHighlighted={highlightedId === message.id}
+                showTimestamp={showTimestamp}
+                onReply={() => {
+                  setEditing(null);
+                  setReplyTo(message);
+                }}
+                onEdit={() => handleStartEdit(message)}
+                onRecall={() => void handleRecall(message)}
+                onOpenImage={setLightboxUrl}
+                onQuoteClick={focusMessage}
+              />
+            );
+          })
         )}
+        {isOtherTyping ? (
+          <div className="flex justify-start px-1 text-sm text-slate-500">
+            {SENDER_LABEL[otherSender]} 正在輸入...
+          </div>
+        ) : null}
         <div ref={bottomRef} />
       </section>
 
@@ -482,6 +581,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         editingLabel={editingLabel}
         onCancelReply={() => setReplyTo(null)}
         onCancelEdit={() => setEditing(null)}
+        onTypingActivity={handleTypingActivity}
         onSubmit={handleSubmit}
       />
 

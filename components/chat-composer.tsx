@@ -19,6 +19,7 @@ type ChatComposerProps = {
   editingLabel: string | null;
   onCancelReply: () => void;
   onCancelEdit: () => void;
+  onTypingActivity: (isTyping: boolean) => void;
   onSubmit: (payload: ComposerPayload) => Promise<void>;
 };
 
@@ -29,6 +30,7 @@ export function ChatComposer({
   editingLabel,
   onCancelReply,
   onCancelEdit,
+  onTypingActivity,
   onSubmit
 }: ChatComposerProps) {
   const [text, setText] = useState("");
@@ -42,6 +44,10 @@ export function ChatComposer({
       setFile(undefined);
     }
   }, [editing]);
+
+  useEffect(() => {
+    return () => onTypingActivity(false);
+  }, [onTypingActivity]);
 
   useEffect(() => {
     if (!file) {
@@ -69,6 +75,7 @@ export function ChatComposer({
 
     setText("");
     setFile(undefined);
+    onTypingActivity(false);
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -166,7 +173,23 @@ export function ChatComposer({
 
           <textarea
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              onTypingActivity(!editing && Boolean(event.target.value.trim()));
+            }}
+            onPaste={(event) => {
+              if (editing) {
+                return;
+              }
+
+              const pastedImage = Array.from(event.clipboardData.items)
+                .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+                ?.getAsFile();
+
+              if (pastedImage) {
+                setFile(pastedImage);
+              }
+            }}
             rows={1}
             placeholder={editing ? "修改訊息內容" : "輸入訊息"}
             className="max-h-36 min-h-11 flex-1 resize-none rounded-lg border border-line bg-slate-50 px-4 py-3 text-base leading-5 outline-none transition placeholder:text-slate-400 focus:border-brand focus:bg-white focus:ring-4 focus:ring-brand/10"

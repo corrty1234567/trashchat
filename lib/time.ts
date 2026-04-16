@@ -37,6 +37,22 @@ export function formatMessageTime(value: string) {
   }).format(date);
 }
 
+export function getMessageMinuteKey(value: string) {
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+
+  return [
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes()
+  ].join("-");
+}
+
 export function truncateText(text: string, maxLength = 20) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
