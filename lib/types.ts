@@ -11,6 +11,7 @@ export type Message = {
   recalledAt: string | null;
   replyToMessageId: string | null;
   replyTo?: ReplyMessage | null;
+  clientStatus?: "sending" | "failed";
 };
 
 export type ReplyMessage = {

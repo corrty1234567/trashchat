@@ -31,7 +31,8 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const isOwn = message.sender === currentSender;
   const isRecalled = Boolean(message.recalledAt);
-  const editable = isOwn && canEditMessage(message.createdAt, message.recalledAt);
+  const isClientOnly = Boolean(message.clientStatus);
+  const editable = isOwn && !isClientOnly && canEditMessage(message.createdAt, message.recalledAt);
   const hasVisibleContent = !isRecalled && (message.text || message.imageUrl);
 
   return (
@@ -48,12 +49,16 @@ export function MessageBubble({
           <span>{isOwn ? "你" : SENDER_LABEL[message.sender]}</span>
           <span>{formatMessageTime(message.createdAt)}</span>
           {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
+          {message.clientStatus === "sending" ? <span>傳送中</span> : null}
+          {message.clientStatus === "failed" ? <span className="text-red-600">傳送失敗</span> : null}
         </div>
 
         <div
           className={clsx(
             "rounded-lg px-3 py-2 shadow-sm",
             isOwn ? "bg-brand text-white" : "bg-white text-ink",
+            message.clientStatus === "sending" && "opacity-75",
+            message.clientStatus === "failed" && "border border-red-200 bg-red-50 text-red-700",
             isRecalled && "border border-dashed border-slate-300 bg-transparent text-slate-500 shadow-none"
           )}
         >
@@ -103,32 +108,34 @@ export function MessageBubble({
           {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
         </div>
 
-        <details className={clsx("relative", isOwn ? "text-right" : "text-left")}>
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white hover:text-slate-800">
-            <MoreHorizontal size={15} />
-            操作
-          </summary>
-          <div
-            className={clsx(
-              "absolute z-10 mt-1 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
-              isOwn ? "right-0" : "left-0"
-            )}
-          >
-            <button type="button" onClick={onReply} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
-              回覆
-            </button>
-            {editable ? (
-              <button type="button" onClick={onEdit} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
-                編輯
+        {!isClientOnly ? (
+          <details className={clsx("relative", isOwn ? "text-right" : "text-left")}>
+            <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white hover:text-slate-800">
+              <MoreHorizontal size={15} />
+              操作
+            </summary>
+            <div
+              className={clsx(
+                "absolute z-10 mt-1 min-w-28 rounded-lg border border-line bg-white p-1 text-sm shadow-soft",
+                isOwn ? "right-0" : "left-0"
+              )}
+            >
+              <button type="button" onClick={onReply} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                回覆
               </button>
-            ) : null}
-            {isOwn && !isRecalled ? (
-              <button type="button" onClick={onRecall} className="block w-full rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50">
-                收回
-              </button>
-            ) : null}
-          </div>
-        </details>
+              {editable ? (
+                <button type="button" onClick={onEdit} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                  編輯
+                </button>
+              ) : null}
+              {isOwn && !isRecalled ? (
+                <button type="button" onClick={onRecall} className="block w-full rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50">
+                  收回
+                </button>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
       </div>
     </article>
   );

@@ -14,6 +14,41 @@ type ChatRoomProps = {
   onSwitchIdentity: () => void;
 };
 
+const POLLING_INTERVAL_MS = 1500;
+
+function sortMessagesByCreatedAt(messages: Message[]) {
+  return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
+}
+
+function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[]) {
+  const loadedIds = new Set(loadedMessages.map((message) => message.id));
+  const pendingMessages = currentMessages.filter(
+    (message) => message.clientStatus && message.id.startsWith("optimistic-") && !loadedIds.has(message.id)
+  );
+
+  return sortMessagesByCreatedAt([...loadedMessages, ...pendingMessages]);
+}
+
+function getOptimisticId() {
+  if (globalThis.crypto?.randomUUID) {
+    return `optimistic-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `optimistic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function toReplyMessage(message: Message): Message["replyTo"] {
+  return {
+    id: message.id,
+    sender: message.sender,
+    text: message.text,
+    imageUrl: message.imageUrl,
+    createdAt: message.createdAt,
+    editedAt: message.editedAt,
+    recalledAt: message.recalledAt
+  };
+}
+
 export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -24,6 +59,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
 
   const otherSender = OTHER_SENDER[sender];
 
@@ -37,7 +73,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     }
 
     const data = (await response.json()) as { messages: Message[] };
-    setMessages(data.messages);
+    setMessages((currentMessages) => mergeLoadedMessages(currentMessages, data.messages));
   }, []);
 
   useEffect(() => {
@@ -68,11 +104,11 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
     const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
 
-    if (!key || !cluster) {
-      const intervalId = window.setInterval(() => {
-        void loadMessages().catch(() => undefined);
-      }, 4000);
+    const intervalId = window.setInterval(() => {
+      void loadMessages().catch(() => undefined);
+    }, POLLING_INTERVAL_MS);
 
+    if (!key || !cluster) {
       return () => window.clearInterval(intervalId);
     }
 
@@ -84,11 +120,21 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     });
 
     return () => {
+      window.clearInterval(intervalId);
       channel.unbind_all();
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();
     };
   }, [loadMessages]);
+
+  useEffect(() => {
+    const optimisticImageUrls = optimisticImageUrlsRef.current;
+
+    return () => {
+      optimisticImageUrls.forEach((url) => URL.revokeObjectURL(url));
+      optimisticImageUrls.clear();
+    };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: isLoading ? "auto" : "smooth" });
@@ -134,7 +180,24 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
 
     try {
       if (editing) {
-        const response = await fetch(`/api/messages/${editing.id}`, {
+        const editingMessage = editing;
+        const editedAt = new Date().toISOString();
+
+        setEditing(null);
+        setMessages((currentMessages) =>
+          currentMessages.map((message) =>
+            message.id === editingMessage.id
+              ? {
+                  ...message,
+                  text: payload.text,
+                  updatedAt: editedAt,
+                  editedAt
+                }
+              : message
+          )
+        );
+
+        const response = await fetch(`/api/messages/${editingMessage.id}`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json"
@@ -146,34 +209,86 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         });
 
         if (!response.ok) {
+          setMessages((currentMessages) =>
+            currentMessages.map((message) => (message.id === editingMessage.id ? editingMessage : message))
+          );
           throw new Error("編輯失敗，可能已超過 15 分鐘");
         }
 
-        setEditing(null);
+        const data = (await response.json()) as { message: Message };
+        setMessages((currentMessages) =>
+          currentMessages.map((message) => (message.id === editingMessage.id ? data.message : message))
+        );
+        void loadMessages().catch(() => undefined);
       } else {
-        const imageUrl = payload.file ? await uploadImage(payload.file) : undefined;
+        const tempId = getOptimisticId();
+        const now = new Date().toISOString();
+        const replyTarget = replyTo;
+        const localImageUrl = payload.file ? URL.createObjectURL(payload.file) : undefined;
 
-        const response = await fetch("/api/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            sender,
-            text: payload.text || undefined,
-            imageUrl,
-            replyToMessageId: replyTo?.id
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error("訊息送出失敗");
+        if (localImageUrl) {
+          optimisticImageUrlsRef.current.set(tempId, localImageUrl);
         }
 
-        setReplyTo(null);
-      }
+        const optimisticMessage: Message = {
+          id: tempId,
+          sender,
+          text: payload.text || null,
+          imageUrl: localImageUrl ?? null,
+          createdAt: now,
+          updatedAt: now,
+          editedAt: null,
+          recalledAt: null,
+          replyToMessageId: replyTarget?.id ?? null,
+          replyTo: replyTarget ? toReplyMessage(replyTarget) : null,
+          clientStatus: "sending"
+        };
 
-      await loadMessages();
+        setMessages((currentMessages) => sortMessagesByCreatedAt([...currentMessages, optimisticMessage]));
+        setReplyTo(null);
+
+        try {
+          const imageUrl = payload.file ? await uploadImage(payload.file) : undefined;
+
+          const response = await fetch("/api/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              sender,
+              text: payload.text || undefined,
+              imageUrl,
+              replyToMessageId: replyTarget?.id
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error("訊息送出失敗");
+          }
+
+          const data = (await response.json()) as { message: Message };
+          const optimisticImageUrl = optimisticImageUrlsRef.current.get(tempId);
+
+          if (optimisticImageUrl) {
+            URL.revokeObjectURL(optimisticImageUrl);
+            optimisticImageUrlsRef.current.delete(tempId);
+          }
+
+          setMessages((currentMessages) =>
+            sortMessagesByCreatedAt([
+              ...currentMessages.filter((message) => message.id !== tempId && message.id !== data.message.id),
+              data.message
+            ])
+          );
+          void loadMessages().catch(() => undefined);
+        } catch (sendError) {
+          setMessages((currentMessages) =>
+            currentMessages.map((message) => (message.id === tempId ? { ...message, clientStatus: "failed" } : message))
+          );
+          throw sendError;
+        }
+      }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "操作失敗");
     } finally {

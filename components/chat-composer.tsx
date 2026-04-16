@@ -64,10 +64,8 @@ export function ChatComposer({
       return;
     }
 
-    await onSubmit({
-      text: text.trim(),
-      file
-    });
+    const submittedText = text.trim();
+    const submittedFile = file;
 
     setText("");
     setFile(undefined);
@@ -75,6 +73,11 @@ export function ChatComposer({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+
+    await onSubmit({
+      text: submittedText,
+      file: submittedFile
+    });
   }
 
   return (
