@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MessageBubble } from "@/components/message-bubble";
+import { VoiceCall } from "@/components/voice-call";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { getMessageMinuteKey } from "@/lib/time";
 import { OTHER_SENDER, SENDER_LABEL, type Message, type Sender } from "@/lib/types";
@@ -560,14 +561,17 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void loadMessages()}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
-            aria-label="重新整理"
-          >
-            <RefreshCw size={17} />
-          </button>
+          <div className="flex items-center gap-2">
+            <VoiceCall sender={sender} recipient={otherSender} />
+            <button
+              type="button"
+              onClick={() => void loadMessages()}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+              aria-label="重新整理"
+            >
+              <RefreshCw size={17} />
+            </button>
+          </div>
         </div>
       </header>
 
