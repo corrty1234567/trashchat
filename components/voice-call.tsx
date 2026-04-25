@@ -9,6 +9,7 @@ import { PUSHER_CHANNEL, PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
 import { SENDER_LABEL, type Sender } from "@/lib/types";
 
 type CallStatus = "idle" | "calling" | "ringing" | "connecting" | "active";
+type RingMode = "outgoing" | "incoming";
 
 type VoiceCallProps = {
   sender: Sender;
@@ -38,6 +39,8 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const ringtoneIntervalRef = useRef<number | null>(null);
 
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
@@ -46,6 +49,116 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  const getAudioContext = useCallback(() => {
+    const WebAudioContext =
+      window.AudioContext ??
+      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!WebAudioContext) {
+      return null;
+    }
+
+    audioContextRef.current ??= new WebAudioContext();
+    return audioContextRef.current;
+  }, []);
+
+  const unlockAudio = useCallback(async () => {
+    const audioContext = getAudioContext();
+
+    if (audioContext?.state === "suspended") {
+      await audioContext.resume().catch(() => undefined);
+    }
+  }, [getAudioContext]);
+
+  const stopRingtone = useCallback(() => {
+    if (ringtoneIntervalRef.current) {
+      window.clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+  }, []);
+
+  const playTone = useCallback(
+    (frequency: number, duration: number, delay = 0) => {
+      const audioContext = getAudioContext();
+
+      if (!audioContext) {
+        return;
+      }
+
+      const startAt = audioContext.currentTime + delay;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.08, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + duration + 0.03);
+    },
+    [getAudioContext]
+  );
+
+  const playRingtonePattern = useCallback(
+    (mode: RingMode) => {
+      if (mode === "incoming") {
+        playTone(740, 0.18, 0);
+        playTone(740, 0.18, 0.28);
+        return;
+      }
+
+      playTone(520, 0.16, 0);
+      playTone(660, 0.16, 0.22);
+    },
+    [playTone]
+  );
+
+  const startRingtone = useCallback(
+    (mode: RingMode) => {
+      stopRingtone();
+      void unlockAudio().then(() => {
+        playRingtonePattern(mode);
+        ringtoneIntervalRef.current = window.setInterval(
+          () => playRingtonePattern(mode),
+          mode === "incoming" ? 1400 : 1900
+        );
+      });
+    },
+    [playRingtonePattern, stopRingtone, unlockAudio]
+  );
+
+  useEffect(() => {
+    function handleFirstInteraction() {
+      void unlockAudio();
+    }
+
+    document.addEventListener("pointerdown", handleFirstInteraction, { once: true });
+    document.addEventListener("keydown", handleFirstInteraction, { once: true });
+
+    return () => {
+      document.removeEventListener("pointerdown", handleFirstInteraction);
+      document.removeEventListener("keydown", handleFirstInteraction);
+    };
+  }, [unlockAudio]);
+
+  useEffect(() => {
+    if (status === "calling") {
+      startRingtone("outgoing");
+      return;
+    }
+
+    if (status === "ringing") {
+      startRingtone("incoming");
+      return;
+    }
+
+    stopRingtone();
+  }, [startRingtone, status, stopRingtone]);
 
   const sendSignal = useCallback(
     async (type: CallSignalType, nextCallId: string, payload?: CallSignal["payload"]) => {
@@ -67,6 +180,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   );
 
   const cleanupCall = useCallback(() => {
+    stopRingtone();
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
 
@@ -81,7 +195,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     callIdRef.current = null;
     setStatus("idle");
     setIsMuted(false);
-  }, []);
+  }, [stopRingtone]);
 
   const getLocalStream = useCallback(async () => {
     if (localStreamRef.current) {
@@ -174,6 +288,8 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   );
 
   const startCall = useCallback(async () => {
+    setError(null);
+
     if (!isRealtimeReady) {
       setError("Pusher 尚未設定，無法使用語音通話。");
       return;
@@ -181,7 +297,6 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
     const nextCallId = createCallId();
     callIdRef.current = nextCallId;
-    setError(null);
     setStatus("calling");
 
     try {
@@ -367,9 +482,10 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   useEffect(() => {
     return () => {
+      stopRingtone();
       cleanupCall();
     };
-  }, [cleanupCall]);
+  }, [cleanupCall, stopRingtone]);
 
   const showCallPanel = status !== "idle" || Boolean(error);
   const statusText =
@@ -388,10 +504,10 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       <button
         type="button"
         onClick={() => void startCall()}
-        disabled={!isRealtimeReady || status !== "idle"}
+        disabled={status !== "idle"}
         className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
         aria-label="語音通話"
-        title={isRealtimeReady ? "語音通話" : "需要先設定 Pusher"}
+        title="語音通話"
       >
         <Phone size={17} />
       </button>
