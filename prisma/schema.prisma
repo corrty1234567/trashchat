@@ -31,3 +31,17 @@ model Message {
   @@index([replyToMessageId])
   @@map("messages")
 }
+
+model CallSignal {
+  id        String   @id @default(cuid())
+  type      String
+  callId    String   @map("call_id")
+  from      Sender
+  to        Sender
+  payload   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([to, createdAt])
+  @@index([callId, createdAt])
+  @@map("call_signals")
+}

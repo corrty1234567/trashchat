@@ -20,6 +20,8 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:global.stun.twilio.com:3478" }
 ];
+const SIGNAL_POLLING_INTERVAL_MS = 800;
+const SIGNAL_POLLING_LOOKBACK_MS = 1500;
 
 function createCallId() {
   if (globalThis.crypto?.randomUUID) {
@@ -47,6 +49,8 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const ringtoneIntervalRef = useRef<number | null>(null);
+  const seenSignalIdsRef = useRef<Set<string>>(new Set());
+  const lastSignalPollAtRef = useRef(new Date(Date.now() - 5000).toISOString());
 
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
@@ -55,6 +59,11 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    seenSignalIdsRef.current.clear();
+    lastSignalPollAtRef.current = new Date(Date.now() - 5000).toISOString();
+  }, [sender]);
 
   const getAudioContext = useCallback(() => {
     const WebAudioContext =
@@ -376,6 +385,30 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     setIsMuted(nextMuted);
   }, [isMuted]);
 
+  const markSignalSeen = useCallback((signal: CallSignal) => {
+    const fallbackKey = `${signal.type}:${signal.callId}:${signal.from}:${signal.to}:${signal.createdAt ?? ""}:${JSON.stringify(
+      signal.payload ?? {}
+    )}`;
+    const signalKey = signal.id ?? fallbackKey;
+    const seenSignals = seenSignalIdsRef.current;
+
+    if (seenSignals.has(signalKey)) {
+      return false;
+    }
+
+    seenSignals.add(signalKey);
+
+    if (seenSignals.size > 500) {
+      const oldestSignal = seenSignals.values().next().value;
+
+      if (oldestSignal) {
+        seenSignals.delete(oldestSignal);
+      }
+    }
+
+    return true;
+  }, []);
+
   const handleSignal = useCallback(
     async (signal: CallSignal) => {
       if (signal.to !== sender || signal.from !== recipient) {
@@ -484,6 +517,17 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     ]
   );
 
+  const receiveSignal = useCallback(
+    async (signal: CallSignal) => {
+      if (!markSignalSeen(signal)) {
+        return;
+      }
+
+      await handleSignal(signal);
+    },
+    [handleSignal, markSignalSeen]
+  );
+
   useEffect(() => {
     if (!pusherKey || !pusherCluster) {
       return;
@@ -495,7 +539,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     const channel = pusher.subscribe(PUSHER_CHANNEL);
 
     channel.bind(PUSHER_EVENT_CALL_SIGNAL, (signal: CallSignal) => {
-      void handleSignal(signal);
+      void receiveSignal(signal);
     });
 
     return () => {
@@ -503,7 +547,53 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();
     };
-  }, [handleSignal, pusherCluster, pusherKey]);
+  }, [pusherCluster, pusherKey, receiveSignal]);
+
+  useEffect(() => {
+    let isStopped = false;
+
+    async function pollSignals() {
+      const since = new Date(
+        new Date(lastSignalPollAtRef.current).getTime() - SIGNAL_POLLING_LOOKBACK_MS
+      ).toISOString();
+
+      try {
+        const response = await fetch(`/api/call?to=${sender}&since=${encodeURIComponent(since)}`, {
+          cache: "no-store"
+        });
+
+        if (!response.ok || isStopped) {
+          return;
+        }
+
+        const data = (await response.json()) as { signals?: CallSignal[] };
+        const signals = data.signals ?? [];
+        let latestSignalTime = new Date(lastSignalPollAtRef.current).getTime();
+
+        for (const signal of signals) {
+          if (signal.createdAt) {
+            latestSignalTime = Math.max(latestSignalTime, new Date(signal.createdAt).getTime());
+          }
+
+          await receiveSignal(signal);
+        }
+
+        if (Number.isFinite(latestSignalTime)) {
+          lastSignalPollAtRef.current = new Date(latestSignalTime).toISOString();
+        }
+      } catch {
+        // Pusher is still the primary path; polling errors are retried on the next tick.
+      }
+    }
+
+    void pollSignals();
+    const intervalId = window.setInterval(() => void pollSignals(), SIGNAL_POLLING_INTERVAL_MS);
+
+    return () => {
+      isStopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [receiveSignal, sender]);
 
   useEffect(() => {
     return () => {

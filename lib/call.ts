@@ -10,10 +10,12 @@ export type CallSignalType =
   | "hangup";
 
 export type CallSignal = {
+  id?: string;
   type: CallSignalType;
   callId: string;
   from: Sender;
   to: Sender;
+  createdAt?: string;
   payload?: {
     offer?: RTCSessionDescriptionInit;
     answer?: RTCSessionDescriptionInit;

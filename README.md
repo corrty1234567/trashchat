@@ -16,6 +16,7 @@
 - 只能收回自己的訊息，收回後保留位置並隱藏文字與圖片
 - PostgreSQL 資料庫儲存訊息
 - Pusher Channels 即時同步，未設定 Pusher 時本機用短輪詢 fallback
+- 語音通話訊號會同時走 Pusher 與 PostgreSQL 輪詢備援，避免 websocket event 漏接
 
 ## 技術
 
@@ -101,6 +102,16 @@ Prisma schema 位於 `prisma/schema.prisma`。
 - `edited_at`
 - `recalled_at`
 - `reply_to_message_id`
+
+語音通話訊號使用 `call_signals`：
+
+- `id`
+- `type`
+- `call_id`
+- `from`
+- `to`
+- `payload`
+- `created_at`
 
 ## 行為規則
 
