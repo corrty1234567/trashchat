@@ -149,6 +149,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
   const typingStopTimerRef = useRef<number | null>(null);
   const otherTypingTimerRef = useRef<number | null>(null);
+  const readSyncRef = useRef(false);
   const hasSentTypingRef = useRef(false);
 
   const otherSender = OTHER_SENDER[sender];
@@ -304,14 +305,28 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
       )
     );
 
+    if (readSyncRef.current) {
+      return;
+    }
+
+    readSyncRef.current = true;
+
     void fetch("/api/messages/read", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ sender })
-    }).catch(() => undefined);
-  }, [messages, sender]);
+    })
+      .then((response) => {
+        if (response.ok) {
+          void loadMessages().catch(() => undefined);
+        }
+      })
+      .finally(() => {
+        readSyncRef.current = false;
+      });
+  }, [loadMessages, messages, sender]);
 
   function focusMessage(messageId: string) {
     document.getElementById(`message-${messageId}`)?.scrollIntoView({

@@ -29,9 +29,15 @@ function createCallId() {
   return `call-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+async function readApiError(response: Response, fallback: string) {
+  const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  return typeof data?.error === "string" ? data.error : fallback;
+}
+
 export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const statusRef = useRef(status);
   const callIdRef = useRef<string | null>(null);
@@ -162,7 +168,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   const sendSignal = useCallback(
     async (type: CallSignalType, nextCallId: string, payload?: CallSignal["payload"]) => {
-      await fetch("/api/call", {
+      const response = await fetch("/api/call", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -175,6 +181,10 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
           payload
         })
       });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "通話訊號傳送失敗。"));
+      }
     },
     [recipient, sender]
   );
@@ -196,6 +206,11 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     setStatus("idle");
     setIsMuted(false);
   }, [stopRingtone]);
+
+  const closePanel = useCallback(() => {
+    setError(null);
+    setIsPanelOpen(false);
+  }, []);
 
   const getLocalStream = useCallback(async () => {
     if (localStreamRef.current) {
@@ -289,6 +304,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   const startCall = useCallback(async () => {
     setError(null);
+    setIsPanelOpen(true);
 
     if (!isRealtimeReady) {
       setError("Pusher 尚未設定，無法使用語音通話。");
@@ -304,6 +320,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       await sendSignal("call-request", nextCallId);
     } catch (callError) {
       cleanupCall();
+      setIsPanelOpen(true);
       setError(callError instanceof Error ? callError.message : "無法開始語音通話。");
     }
   }, [cleanupCall, getLocalStream, isRealtimeReady, sendSignal]);
@@ -337,6 +354,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     }
 
     cleanupCall();
+    setIsPanelOpen(false);
   }, [cleanupCall, sendSignal]);
 
   const hangUp = useCallback(async () => {
@@ -347,6 +365,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     }
 
     cleanupCall();
+    setIsPanelOpen(false);
   }, [cleanupCall, sendSignal]);
 
   const toggleMute = useCallback(() => {
@@ -370,6 +389,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
         }
 
         callIdRef.current = signal.callId;
+        setIsPanelOpen(true);
         setError(null);
         setStatus("ringing");
         return;
@@ -381,12 +401,15 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
       if (signal.type === "call-reject") {
         cleanupCall();
+        setIsPanelOpen(true);
         setError(`${SENDER_LABEL[recipient]} 沒有接聽。`);
         return;
       }
 
       if (signal.type === "hangup") {
         cleanupCall();
+        setIsPanelOpen(true);
+        setError(`${SENDER_LABEL[recipient]} 已掛斷。`);
         return;
       }
 
@@ -402,6 +425,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
         } catch (callError) {
           await sendSignal("hangup", signal.callId).catch(() => undefined);
           cleanupCall();
+          setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
         }
         return;
@@ -421,6 +445,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
         } catch (callError) {
           await sendSignal("hangup", signal.callId).catch(() => undefined);
           cleanupCall();
+          setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
         }
         return;
@@ -487,7 +512,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     };
   }, [cleanupCall, stopRingtone]);
 
-  const showCallPanel = status !== "idle" || Boolean(error);
+  const showCallPanel = isPanelOpen || status !== "idle" || Boolean(error);
   const statusText =
     status === "calling"
       ? `正在撥打 ${SENDER_LABEL[recipient]}`
@@ -515,7 +540,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {showCallPanel ? (
-        <div className="fixed bottom-24 left-1/2 z-40 w-[min(calc(100vw-2rem),360px)] -translate-x-1/2 rounded-lg border border-line bg-white p-3 shadow-soft">
+        <div className="fixed right-4 top-20 z-[1000] w-[min(calc(100vw-2rem),380px)] rounded-lg border border-line bg-white p-3 shadow-soft">
           <div className="flex items-center gap-3">
             <div
               className={clsx(
@@ -532,7 +557,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
             {status === "idle" ? (
               <button
                 type="button"
-                onClick={() => setError(null)}
+                onClick={closePanel}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                 aria-label="關閉"
               >

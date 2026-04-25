@@ -25,18 +25,24 @@ function getPusherServer() {
 }
 
 export async function notifyMessagesChanged(payload: { type: "created" | "edited" | "recalled" | "read"; id?: string }) {
-  await triggerRealtimeEvent(PUSHER_EVENT_MESSAGES_CHANGED, payload);
+  try {
+    await triggerRealtimeEvent(PUSHER_EVENT_MESSAGES_CHANGED, payload);
+  } catch (error) {
+    console.error("Message realtime notification failed", error);
+  }
 }
 
 export async function triggerRealtimeEvent(eventName: string, payload: Record<string, unknown>) {
   const pusher = getPusherServer();
 
   if (!pusher) {
-    return;
+    return false;
   }
 
   await pusher.trigger(PUSHER_CHANNEL, eventName, {
     ...payload,
     at: new Date().toISOString()
   });
+
+  return true;
 }

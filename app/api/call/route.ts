@@ -24,7 +24,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Caller and recipient must be different." }, { status: 400 });
   }
 
-  await triggerRealtimeEvent(PUSHER_EVENT_CALL_SIGNAL, parsed.data);
+  let didTrigger = false;
+
+  try {
+    didTrigger = await triggerRealtimeEvent(PUSHER_EVENT_CALL_SIGNAL, parsed.data);
+  } catch (error) {
+    console.error("Call signal failed", error);
+    return NextResponse.json({ error: "Call signaling failed while contacting Pusher." }, { status: 500 });
+  }
+
+  if (!didTrigger) {
+    return NextResponse.json(
+      { error: "Pusher environment variables are missing, so call signaling cannot be delivered." },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }
