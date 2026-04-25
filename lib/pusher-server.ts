@@ -24,7 +24,7 @@ function getPusherServer() {
   return pusherServer;
 }
 
-export async function notifyMessagesChanged(payload: { type: "created" | "edited" | "recalled"; id: string }) {
+export async function notifyMessagesChanged(payload: { type: "created" | "edited" | "recalled" | "read"; id?: string }) {
   await triggerRealtimeEvent(PUSHER_EVENT_MESSAGES_CHANGED, payload);
 }
 

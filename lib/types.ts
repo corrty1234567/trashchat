@@ -9,6 +9,7 @@ export type Message = {
   updatedAt: string;
   editedAt: string | null;
   recalledAt: string | null;
+  readAt: string | null;
   replyToMessageId: string | null;
   replyTo?: ReplyMessage | null;
   clientStatus?: "sending" | "failed";

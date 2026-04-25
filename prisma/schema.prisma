@@ -21,6 +21,7 @@ model Message {
   updatedAt        DateTime  @updatedAt @map("updated_at")
   editedAt         DateTime? @map("edited_at")
   recalledAt       DateTime? @map("recalled_at")
+  readAt           DateTime? @map("read_at")
   replyToMessageId String?   @map("reply_to_message_id")
 
   replyTo Message?  @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)

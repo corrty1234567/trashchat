@@ -270,6 +270,48 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     return editing.text || (editing.imageUrl ? "圖片訊息" : "訊息");
   }, [editing]);
 
+  const latestOwnReadableMessageId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+
+      if (message.sender === sender && !message.clientStatus && !message.recalledAt) {
+        return message.id;
+      }
+    }
+
+    return null;
+  }, [messages, sender]);
+
+  useEffect(() => {
+    const hasUnreadIncomingMessages = messages.some(
+      (message) => message.sender !== sender && !message.readAt && !message.clientStatus
+    );
+
+    if (!hasUnreadIncomingMessages) {
+      return;
+    }
+
+    const readAt = new Date().toISOString();
+    setMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.sender !== sender && !message.readAt && !message.clientStatus
+          ? {
+              ...message,
+              readAt
+            }
+          : message
+      )
+    );
+
+    void fetch("/api/messages/read", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ sender })
+    }).catch(() => undefined);
+  }, [messages, sender]);
+
   function focusMessage(messageId: string) {
     document.getElementById(`message-${messageId}`)?.scrollIntoView({
       behavior: "smooth",
@@ -409,6 +451,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
           updatedAt: now,
           editedAt: null,
           recalledAt: null,
+          readAt: null,
           replyToMessageId: replyTarget?.id ?? null,
           replyTo: replyTarget ? toReplyMessage(replyTarget) : null,
           clientStatus: "sending"
@@ -550,6 +593,13 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
                 currentSender={sender}
                 isHighlighted={highlightedId === message.id}
                 showTimestamp={showTimestamp}
+                readReceipt={
+                  message.id === latestOwnReadableMessageId && message.sender === sender
+                    ? message.readAt
+                      ? "read"
+                      : "unread"
+                    : null
+                }
                 onReply={() => {
                   setEditing(null);
                   setReplyTo(message);
