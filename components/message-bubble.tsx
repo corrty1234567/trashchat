@@ -8,8 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { LinkifiedText } from "@/components/linkified-text";
 import { LinkPreviewCard } from "@/components/link-preview-card";
 import { getFirstUrl } from "@/lib/links";
+import { getMessageImageUrls, getReplyPreview } from "@/lib/messages";
 import { canEditMessage, formatMessageTime } from "@/lib/time";
-import { getReplyPreview } from "@/lib/messages";
 import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
 
 type MessageBubbleProps = {
@@ -21,9 +21,75 @@ type MessageBubbleProps = {
   onReply: () => void;
   onEdit: () => void;
   onRecall: () => void;
-  onOpenImage: (url: string) => void;
+  onOpenImages: (urls: string[], index?: number) => void;
   onQuoteClick: (messageId: string) => void;
 };
+
+type MessageImageStackProps = {
+  imageUrls: string[];
+  isOwn: boolean;
+  senderLabel: string;
+  onOpenImages: (urls: string[], index?: number) => void;
+};
+
+function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: MessageImageStackProps) {
+  if (imageUrls.length === 0) {
+    return null;
+  }
+
+  if (imageUrls.length === 1) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenImages(imageUrls, 0)}
+        className="mb-2 block overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
+        aria-label="開啟圖片預覽"
+      >
+        <img
+          src={imageUrls[0]}
+          alt="聊天圖片"
+          className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
+        />
+      </button>
+    );
+  }
+
+  const visibleBackCards = Math.min(imageUrls.length - 1, 3);
+  const previewUrl = imageUrls[0];
+
+  return (
+    <div className="mb-2">
+      <p className={clsx("mb-1 px-1 text-sm", isOwn ? "text-white/90" : "text-slate-600")}>
+        {senderLabel}傳送了 {imageUrls.length} 張相片
+      </p>
+      <button
+        type="button"
+        onClick={() => onOpenImages(imageUrls, 0)}
+        className="relative block h-[220px] w-[min(70vw,260px)] focus:outline-none focus:ring-4 focus:ring-brand/20 sm:h-[240px] sm:w-[280px]"
+        aria-label={`開啟 ${imageUrls.length} 張相片`}
+      >
+        {Array.from({ length: visibleBackCards }).map((_, index) => (
+          <span
+            key={index}
+            className="absolute inset-0 rounded-lg border border-white/70 bg-green-500 shadow-sm"
+            style={{
+              transform: `translate(${(visibleBackCards - index) * 8}px, -${(visibleBackCards - index) * 7}px) rotate(${
+                4 - index * 2
+              }deg)`,
+              opacity: 0.78 - index * 0.12
+            }}
+          />
+        ))}
+        <span className="absolute inset-0 overflow-hidden rounded-lg border border-white/80 bg-green-500 p-2 shadow-sm">
+          <img src={previewUrl} alt="相片堆疊預覽" className="h-full w-full rounded-md object-contain" />
+        </span>
+        <span className="absolute bottom-2 right-2 rounded-md bg-black/65 px-2 py-1 text-xs font-semibold text-white">
+          +{imageUrls.length - 1}
+        </span>
+      </button>
+    </div>
+  );
+}
 
 export function MessageBubble({
   message,
@@ -34,14 +100,15 @@ export function MessageBubble({
   onReply,
   onEdit,
   onRecall,
-  onOpenImage,
+  onOpenImages,
   onQuoteClick
 }: MessageBubbleProps) {
   const isOwn = message.sender === currentSender;
   const isRecalled = Boolean(message.recalledAt);
   const isClientOnly = Boolean(message.clientStatus);
   const editable = isOwn && !isClientOnly && canEditMessage(message.createdAt, message.recalledAt);
-  const hasVisibleContent = !isRecalled && (message.text || message.imageUrl);
+  const imageUrls = isRecalled ? [] : getMessageImageUrls(message);
+  const hasVisibleContent = !isRecalled && (message.text || imageUrls.length > 0);
   const hasStatus = Boolean(message.editedAt && !isRecalled) || Boolean(message.clientStatus);
   const showMeta = showTimestamp || hasStatus;
   const previewUrl = !isRecalled ? getFirstUrl(message.text) : null;
@@ -120,9 +187,9 @@ export function MessageBubble({
                     : "border-brand bg-slate-50 text-slate-600 hover:bg-slate-100"
                 )}
               >
-                {message.replyTo.imageUrl && !message.replyTo.recalledAt ? (
+                {getMessageImageUrls(message.replyTo).length > 0 && !message.replyTo.recalledAt ? (
                   <img
-                    src={message.replyTo.imageUrl}
+                    src={getMessageImageUrls(message.replyTo)[0]}
                     alt="回覆圖片縮圖"
                     className="h-9 w-9 shrink-0 rounded-md object-contain"
                   />
@@ -135,20 +202,12 @@ export function MessageBubble({
               <p className="text-sm italic">{isOwn ? "你已收回一則訊息" : "對方已收回一則訊息"}</p>
             ) : null}
 
-            {message.imageUrl && !isRecalled ? (
-              <button
-                type="button"
-                onClick={() => onOpenImage(message.imageUrl ?? "")}
-                className="mb-2 block overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
-                aria-label="開啟圖片預覽"
-              >
-                <img
-                  src={message.imageUrl}
-                  alt="聊天圖片"
-                  className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
-                />
-              </button>
-            ) : null}
+            <MessageImageStack
+              imageUrls={imageUrls}
+              isOwn={isOwn}
+              senderLabel={isOwn ? "你" : SENDER_LABEL[message.sender]}
+              onOpenImages={onOpenImages}
+            />
 
             {message.text && !isRecalled ? <LinkifiedText text={message.text} isOwn={isOwn} /> : null}
 
@@ -192,11 +251,19 @@ export function MessageBubble({
                 )}
                 onClick={(event) => event.stopPropagation()}
               >
-                <button type="button" onClick={() => runAction(onReply)} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => runAction(onReply)}
+                  className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50"
+                >
                   回覆
                 </button>
                 {editable ? (
-                  <button type="button" onClick={() => runAction(onEdit)} className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50">
+                  <button
+                    type="button"
+                    onClick={() => runAction(onEdit)}
+                    className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50"
+                  >
                     編輯
                   </button>
                 ) : null}

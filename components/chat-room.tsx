@@ -52,6 +52,7 @@ function toReplyMessage(message: Message): Message["replyTo"] {
     sender: message.sender,
     text: message.text,
     imageUrl: message.imageUrl,
+    imageUrls: message.imageUrls ?? [],
     createdAt: message.createdAt,
     editedAt: message.editedAt,
     recalledAt: message.recalledAt
@@ -144,7 +145,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [error, setError] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -346,7 +347,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
       return null;
     }
 
-    return editing.text || (editing.imageUrl ? "圖片訊息" : "訊息");
+    return editing.text || ((editing.imageUrls?.length ?? 0) > 0 || editing.imageUrl ? "圖片訊息" : "訊息");
   }, [editing]);
 
   const latestOwnReadableMessageId = useMemo(() => {
@@ -527,59 +528,35 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         void loadMessages().catch(() => undefined);
       } else {
         const imageFiles = payload.files;
-        const baseTime = Date.now();
+        const now = new Date().toISOString();
         const replyTarget = replyTo;
-        const optimisticEntries =
-          imageFiles.length > 0
-            ? imageFiles.map((file, index) => ({
-                tempId: getOptimisticId(),
-                file,
-                text: index === 0 ? payload.text || null : null,
-                createdAt: new Date(baseTime + index).toISOString()
-              }))
-            : [
-                {
-                  tempId: getOptimisticId(),
-                  file: undefined,
-                  text: payload.text || null,
-                  createdAt: new Date(baseTime).toISOString()
-                }
-              ];
-
-        const optimisticMessages = optimisticEntries.map((entry) => {
-          const localImageUrl = entry.file ? URL.createObjectURL(entry.file) : undefined;
-
-          if (localImageUrl) {
-            optimisticImageUrlsRef.current.set(entry.tempId, localImageUrl);
-          }
-
-          return {
-            id: entry.tempId,
-            sender,
-            text: entry.text,
-            imageUrl: localImageUrl ?? null,
-            createdAt: entry.createdAt,
-            updatedAt: entry.createdAt,
-            editedAt: null,
-            recalledAt: null,
-            readAt: null,
-            replyToMessageId: replyTarget?.id ?? null,
-            replyTo: replyTarget ? toReplyMessage(replyTarget) : null,
-            clientStatus: "sending"
-          } satisfies Message;
+        const tempId = getOptimisticId();
+        const localImageUrls = imageFiles.map((file, index) => {
+          const localImageUrl = URL.createObjectURL(file);
+          optimisticImageUrlsRef.current.set(`${tempId}-${index}`, localImageUrl);
+          return localImageUrl;
         });
+        const optimisticMessage: Message = {
+          id: tempId,
+          sender,
+          text: payload.text || null,
+          imageUrl: localImageUrls[0] ?? null,
+          imageUrls: localImageUrls,
+          createdAt: now,
+          updatedAt: now,
+          editedAt: null,
+          recalledAt: null,
+          readAt: null,
+          replyToMessageId: replyTarget?.id ?? null,
+          replyTo: replyTarget ? toReplyMessage(replyTarget) : null,
+          clientStatus: "sending"
+        };
 
-        setMessages((currentMessages) => sortMessagesByCreatedAt([...currentMessages, ...optimisticMessages]));
+        setMessages((currentMessages) => sortMessagesByCreatedAt([...currentMessages, optimisticMessage]));
         setReplyTo(null);
 
         try {
           const uploadedImageUrls = await Promise.all(imageFiles.map((file) => uploadImage(file)));
-          const messagePayloads = optimisticEntries.map((entry, index) => ({
-            sender,
-            text: entry.text || undefined,
-            imageUrl: entry.file ? uploadedImageUrls[index] : undefined,
-            replyToMessageId: replyTarget?.id
-          }));
 
           const response = await fetch("/api/messages", {
             method: "POST",
@@ -587,7 +564,11 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
               "Content-Type": "application/json"
             },
             body: JSON.stringify({
-              messages: messagePayloads
+              sender,
+              text: payload.text || undefined,
+              imageUrl: uploadedImageUrls[0],
+              imageUrls: uploadedImageUrls,
+              replyToMessageId: replyTarget?.id
             })
           });
 
@@ -595,32 +576,26 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
             throw new Error("訊息送出失敗");
           }
 
-          const data = (await response.json()) as { messages: Message[] };
+          const data = (await response.json()) as { message: Message };
 
-          optimisticEntries.forEach((entry) => {
-            const optimisticImageUrl = optimisticImageUrlsRef.current.get(entry.tempId);
-
+          localImageUrls.forEach((_, index) => {
+            const optimisticImageUrl = optimisticImageUrlsRef.current.get(`${tempId}-${index}`);
             if (optimisticImageUrl) {
               URL.revokeObjectURL(optimisticImageUrl);
-              optimisticImageUrlsRef.current.delete(entry.tempId);
+              optimisticImageUrlsRef.current.delete(`${tempId}-${index}`);
             }
           });
 
-          const optimisticIds = new Set(optimisticEntries.map((entry) => entry.tempId));
-          const createdIds = new Set(data.messages.map((message) => message.id));
-
           setMessages((currentMessages) =>
             sortMessagesByCreatedAt([
-              ...currentMessages.filter((message) => !optimisticIds.has(message.id) && !createdIds.has(message.id)),
-              ...data.messages
+              ...currentMessages.filter((message) => message.id !== tempId && message.id !== data.message.id),
+              data.message
             ])
           );
           void loadMessages().catch(() => undefined);
         } catch (sendError) {
           setMessages((currentMessages) =>
-            currentMessages.map((message) =>
-              optimisticEntries.some((entry) => entry.tempId === message.id) ? { ...message, clientStatus: "failed" } : message
-            )
+            currentMessages.map((message) => (message.id === tempId ? { ...message, clientStatus: "failed" } : message))
           );
           throw sendError;
         }
@@ -732,7 +707,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
                 }}
                 onEdit={() => handleStartEdit(message)}
                 onRecall={() => void handleRecall(message)}
-                onOpenImage={setLightboxUrl}
+                onOpenImages={(urls, index = 0) => setLightboxImages({ urls, index })}
                 onQuoteClick={focusMessage}
               />
             );
@@ -761,7 +736,11 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         onSubmit={handleSubmit}
       />
 
-      <ImageLightbox imageUrl={lightboxUrl} onClose={() => setLightboxUrl(null)} />
+      <ImageLightbox
+        imageUrls={lightboxImages?.urls ?? []}
+        initialIndex={lightboxImages?.index ?? 0}
+        onClose={() => setLightboxImages(null)}
+      />
     </main>
   );
 }

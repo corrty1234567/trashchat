@@ -10,9 +10,10 @@ const messageInputSchema = z
     sender: z.enum(["CHEN", "ZUO"]),
     text: z.string().trim().max(4000).optional(),
     imageUrl: z.string().url().optional(),
+    imageUrls: z.array(z.string().url()).max(10).optional(),
     replyToMessageId: z.string().cuid().optional()
   })
-  .refine((data) => Boolean(data.text?.trim() || data.imageUrl), {
+  .refine((data) => Boolean(data.text?.trim() || data.imageUrl || data.imageUrls?.length), {
     message: "Message needs text or image."
   });
 
@@ -30,6 +31,7 @@ const messageInclude = {
       sender: true,
       text: true,
       imageUrl: true,
+      imageUrls: true,
       createdAt: true,
       editedAt: true,
       recalledAt: true
@@ -41,6 +43,11 @@ type MessageInput = z.infer<typeof messageInputSchema>;
 
 function getMessageInputs(data: z.infer<typeof createMessageSchema>) {
   return "messages" in data ? data.messages : [data];
+}
+
+function getImageUrls(message: MessageInput) {
+  const urls = message.imageUrls?.length ? message.imageUrls : message.imageUrl ? [message.imageUrl] : [];
+  return urls.slice(0, 10);
 }
 
 export async function GET() {
@@ -89,9 +96,10 @@ export async function POST(request: Request) {
     messageInputs.map((message: MessageInput) =>
       prisma.message.create({
         data: {
+          imageUrls: getImageUrls(message),
           sender: message.sender,
           text: message.text?.trim() || null,
-          imageUrl: message.imageUrl ?? null,
+          imageUrl: getImageUrls(message)[0] ?? null,
           replyToMessageId: message.replyToMessageId ?? null
         },
         include: messageInclude

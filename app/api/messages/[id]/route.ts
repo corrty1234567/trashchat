@@ -22,6 +22,7 @@ const messageInclude = {
       sender: true,
       text: true,
       imageUrl: true,
+      imageUrls: true,
       createdAt: true,
       editedAt: true,
       recalledAt: true
@@ -107,6 +108,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     data: {
       text: null,
       imageUrl: null,
+      imageUrls: [],
       recalledAt: new Date()
     },
     include: messageInclude

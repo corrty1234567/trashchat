@@ -1,6 +1,18 @@
 import type { Message } from "@/lib/types";
 import { truncateText } from "@/lib/time";
 
+export function getMessageImageUrls(message: Pick<Message, "imageUrl" | "imageUrls"> | Message["replyTo"]) {
+  if (!message) {
+    return [];
+  }
+
+  if (message.imageUrls?.length) {
+    return message.imageUrls;
+  }
+
+  return message.imageUrl ? [message.imageUrl] : [];
+}
+
 export function getReplyPreview(message: Message["replyTo"]) {
   if (!message) {
     return "原訊息不存在";
@@ -14,7 +26,13 @@ export function getReplyPreview(message: Message["replyTo"]) {
     return truncateText(message.text.trim(), 20);
   }
 
-  if (message.imageUrl) {
+  const imageCount = getMessageImageUrls(message).length;
+
+  if (imageCount > 1) {
+    return `${imageCount} 張圖片`;
+  }
+
+  if (imageCount === 1) {
     return "圖片";
   }
 

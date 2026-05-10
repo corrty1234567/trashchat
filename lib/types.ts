@@ -5,6 +5,7 @@ export type Message = {
   sender: Sender;
   text: string | null;
   imageUrl: string | null;
+  imageUrls: string[];
   createdAt: string;
   updatedAt: string;
   editedAt: string | null;
@@ -20,6 +21,7 @@ export type ReplyMessage = {
   sender: Sender;
   text: string | null;
   imageUrl: string | null;
+  imageUrls: string[];
   createdAt: string;
   editedAt: string | null;
   recalledAt: string | null;
