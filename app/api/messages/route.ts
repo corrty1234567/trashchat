@@ -5,7 +5,7 @@ import { notifyMessagesChanged } from "@/lib/pusher-server";
 
 export const runtime = "nodejs";
 
-const createMessageSchema = z
+const messageInputSchema = z
   .object({
     sender: z.enum(["CHEN", "ZUO"]),
     text: z.string().trim().max(4000).optional(),
@@ -15,6 +15,13 @@ const createMessageSchema = z
   .refine((data) => Boolean(data.text?.trim() || data.imageUrl), {
     message: "Message needs text or image."
   });
+
+const createMessageSchema = z.union([
+  messageInputSchema,
+  z.object({
+    messages: z.array(messageInputSchema).min(1).max(10)
+  })
+]);
 
 const messageInclude = {
   replyTo: {
@@ -29,6 +36,12 @@ const messageInclude = {
     }
   }
 } as const;
+
+type MessageInput = z.infer<typeof messageInputSchema>;
+
+function getMessageInputs(data: z.infer<typeof createMessageSchema>) {
+  return "messages" in data ? data.messages : [data];
+}
 
 export async function GET() {
   const messages = await prisma.message.findMany({
@@ -48,30 +61,49 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { sender, text, imageUrl, replyToMessageId } = parsed.data;
+  const messageInputs = getMessageInputs(parsed.data);
+  const replyTargetIds = [
+    ...new Set(
+      messageInputs
+        .map((message) => message.replyToMessageId)
+        .filter((replyToMessageId): replyToMessageId is string => Boolean(replyToMessageId))
+    )
+  ];
 
-  if (replyToMessageId) {
-    const repliedMessage = await prisma.message.findUnique({
-      where: { id: replyToMessageId },
+  if (replyTargetIds.length > 0) {
+    const repliedMessages = await prisma.message.findMany({
+      where: {
+        id: {
+          in: replyTargetIds
+        }
+      },
       select: { id: true }
     });
 
-    if (!repliedMessage) {
+    if (repliedMessages.length !== replyTargetIds.length) {
       return NextResponse.json({ error: "Reply target does not exist." }, { status: 400 });
     }
   }
 
-  const message = await prisma.message.create({
-    data: {
-      sender,
-      text: text?.trim() || null,
-      imageUrl: imageUrl ?? null,
-      replyToMessageId: replyToMessageId ?? null
-    },
-    include: messageInclude
-  });
+  const messages = await prisma.$transaction(
+    messageInputs.map((message: MessageInput) =>
+      prisma.message.create({
+        data: {
+          sender: message.sender,
+          text: message.text?.trim() || null,
+          imageUrl: message.imageUrl ?? null,
+          replyToMessageId: message.replyToMessageId ?? null
+        },
+        include: messageInclude
+      })
+    )
+  );
 
-  await notifyMessagesChanged({ type: "created", id: message.id });
+  await notifyMessagesChanged({ type: "created", id: messages[0]?.id });
 
-  return NextResponse.json({ message }, { status: 201 });
+  if ("messages" in parsed.data) {
+    return NextResponse.json({ messages }, { status: 201 });
+  }
+
+  return NextResponse.json({ message: messages[0] }, { status: 201 });
 }

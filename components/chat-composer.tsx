@@ -9,7 +9,7 @@ import type { Message } from "@/lib/types";
 
 export type ComposerPayload = {
   text: string;
-  file?: File;
+  files: File[];
 };
 
 type ChatComposerProps = {
@@ -23,6 +23,8 @@ type ChatComposerProps = {
   onSubmit: (payload: ComposerPayload) => Promise<void>;
 };
 
+const MAX_SELECTED_IMAGES = 10;
+
 export function ChatComposer({
   isSending,
   replyTo,
@@ -34,14 +36,14 @@ export function ChatComposer({
   onSubmit
 }: ChatComposerProps) {
   const [text, setText] = useState("");
-  const [file, setFile] = useState<File | undefined>();
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [previewItems, setPreviewItems] = useState<Array<{ file: File; url: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (editing) {
       setText(editing.text ?? "");
-      setFile(undefined);
+      setFiles([]);
     }
   }, [editing]);
 
@@ -50,18 +52,30 @@ export function ChatComposer({
   }, [onTypingActivity]);
 
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
+    const nextPreviewItems = files.map((selectedFile) => ({
+      file: selectedFile,
+      url: URL.createObjectURL(selectedFile)
+    }));
+
+    setPreviewItems(nextPreviewItems);
+
+    return () => {
+      nextPreviewItems.forEach((item) => URL.revokeObjectURL(item.url));
+    };
+  }, [files]);
+
+  const canSubmit = useMemo(() => Boolean(text.trim() || files.length > 0) && !isSending, [files.length, isSending, text]);
+
+  function addFiles(nextFiles: File[]) {
+    if (editing || nextFiles.length === 0) {
       return;
     }
 
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
-
-  const canSubmit = useMemo(() => Boolean(text.trim() || file) && !isSending, [file, isSending, text]);
+    setFiles((currentFiles) => {
+      const imageFiles = nextFiles.filter((nextFile) => nextFile.type.startsWith("image/"));
+      return [...currentFiles, ...imageFiles].slice(0, MAX_SELECTED_IMAGES);
+    });
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,10 +85,10 @@ export function ChatComposer({
     }
 
     const submittedText = text.trim();
-    const submittedFile = file;
+    const submittedFiles = files;
 
     setText("");
-    setFile(undefined);
+    setFiles([]);
     onTypingActivity(false);
 
     if (fileInputRef.current) {
@@ -83,7 +97,7 @@ export function ChatComposer({
 
     await onSubmit({
       text: submittedText,
-      file: submittedFile
+      files: submittedFiles
     });
   }
 
@@ -127,27 +141,48 @@ export function ChatComposer({
           </div>
         ) : null}
 
-        {previewUrl ? (
-          <div className="mb-2 flex items-center gap-3 rounded-lg border border-line bg-slate-50 p-2">
-            <img src={previewUrl} alt="待傳送圖片預覽" className="h-16 w-16 rounded-md object-contain" />
-            <div className="min-w-0 flex-1 text-sm text-slate-600">
-              <p className="truncate font-medium text-slate-800">{file?.name}</p>
-              <p>圖片會與文字一起送出</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setFile(undefined);
+        {previewItems.length > 0 ? (
+          <div className="mb-2 rounded-lg border border-line bg-slate-50 p-2">
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm text-slate-600">
+              <p>
+                已選擇 {previewItems.length} 張圖片
+                {text.trim() ? "，文字會放在第一張" : ""}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setFiles([]);
 
-                if (fileInputRef.current) {
-                  fileInputRef.current.value = "";
-                }
-              }}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-white hover:text-slate-900"
-              aria-label="移除圖片"
-            >
-              <X size={17} />
-            </button>
+                  if (fileInputRef.current) {
+                    fileInputRef.current.value = "";
+                  }
+                }}
+                className="rounded-md px-2 py-1 text-slate-500 hover:bg-white hover:text-slate-900"
+              >
+                全部移除
+              </button>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {previewItems.map((item, index) => (
+                <div key={`${item.file.name}-${item.file.lastModified}-${index}`} className="relative h-20 w-20 shrink-0">
+                  <img src={item.url} alt="待傳送圖片預覽" className="h-20 w-20 rounded-md bg-white object-contain" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFiles((currentFiles) => currentFiles.filter((_, fileIndex) => fileIndex !== index));
+
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = "";
+                      }
+                    }}
+                    className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md bg-black/60 text-white hover:bg-black/75"
+                    aria-label="移除圖片"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -156,9 +191,13 @@ export function ChatComposer({
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            multiple
             className="sr-only"
             disabled={Boolean(editing) || isSending}
-            onChange={(event) => setFile(event.target.files?.[0])}
+            onChange={(event) => {
+              addFiles(Array.from(event.target.files ?? []));
+              event.currentTarget.value = "";
+            }}
           />
 
           <button
@@ -182,12 +221,13 @@ export function ChatComposer({
                 return;
               }
 
-              const pastedImage = Array.from(event.clipboardData.items)
-                .find((item) => item.kind === "file" && item.type.startsWith("image/"))
-                ?.getAsFile();
+              const pastedImages = Array.from(event.clipboardData.items)
+                .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+                .map((item) => item.getAsFile())
+                .filter((item): item is File => Boolean(item));
 
-              if (pastedImage) {
-                setFile(pastedImage);
+              if (pastedImages.length > 0) {
+                addFiles(pastedImages);
               }
             }}
             rows={1}
