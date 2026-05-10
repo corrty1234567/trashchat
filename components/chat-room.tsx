@@ -16,7 +16,9 @@ type ChatRoomProps = {
   onSwitchIdentity: () => void;
 };
 
-const POLLING_INTERVAL_MS = 1500;
+const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1500;
+const MESSAGE_REALTIME_HEALTH_CHECK_MS = 15000;
+const MESSAGE_BACKGROUND_POLLING_INTERVAL_MS = 30000;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
@@ -146,7 +148,9 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const loadMessagesPromiseRef = useRef<Promise<void> | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
+  const realtimeConnectedRef = useRef(false);
   const typingStopTimerRef = useRef<number | null>(null);
   const otherTypingTimerRef = useRef<number | null>(null);
   const readSyncRef = useRef(false);
@@ -155,16 +159,32 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const otherSender = OTHER_SENDER[sender];
 
   const loadMessages = useCallback(async () => {
-    const response = await fetch("/api/messages", {
-      cache: "no-store"
-    });
-
-    if (!response.ok) {
-      throw new Error("無法載入訊息");
+    if (loadMessagesPromiseRef.current) {
+      return loadMessagesPromiseRef.current;
     }
 
-    const data = (await response.json()) as { messages: Message[] };
-    setMessages((currentMessages) => mergeLoadedMessages(currentMessages, data.messages));
+    const request = (async () => {
+      const response = await fetch("/api/messages", {
+        cache: "no-store"
+      });
+
+      if (!response.ok) {
+        throw new Error("無法載入訊息");
+      }
+
+      const data = (await response.json()) as { messages: Message[] };
+      setMessages((currentMessages) => mergeLoadedMessages(currentMessages, data.messages));
+    })();
+
+    loadMessagesPromiseRef.current = request;
+
+    try {
+      await request;
+    } finally {
+      if (loadMessagesPromiseRef.current === request) {
+        loadMessagesPromiseRef.current = null;
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -194,17 +214,66 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
     const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+    let timeoutId: number | null = null;
+    let isStopped = false;
 
-    const intervalId = window.setInterval(() => {
-      void loadMessages().catch(() => undefined);
-    }, POLLING_INTERVAL_MS);
+    function getPollingDelay() {
+      if (document.hidden) {
+        return MESSAGE_BACKGROUND_POLLING_INTERVAL_MS;
+      }
+
+      return realtimeConnectedRef.current ? MESSAGE_REALTIME_HEALTH_CHECK_MS : MESSAGE_FALLBACK_POLLING_INTERVAL_MS;
+    }
+
+    function schedulePoll(delay = getPollingDelay()) {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void loadMessages()
+          .catch(() => undefined)
+          .finally(() => {
+            if (!isStopped) {
+              schedulePoll();
+            }
+          });
+      }, delay);
+    }
+
+    function handleVisibilityChange() {
+      schedulePoll();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     if (!key || !cluster) {
-      return () => window.clearInterval(intervalId);
+      realtimeConnectedRef.current = false;
+      schedulePoll();
+
+      return () => {
+        isStopped = true;
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+        }
+      };
     }
 
     const pusher = new Pusher(key, { cluster });
     const channel = pusher.subscribe(PUSHER_CHANNEL);
+    const handleStateChange = ({ current }: { current: string }) => {
+      const isConnected = current === "connected";
+      const wasConnected = realtimeConnectedRef.current;
+      realtimeConnectedRef.current = isConnected;
+
+      if (wasConnected !== isConnected) {
+        schedulePoll(isConnected ? MESSAGE_REALTIME_HEALTH_CHECK_MS : 0);
+      }
+    };
+
+    pusher.connection.bind("state_change", handleStateChange);
 
     channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, () => {
       void loadMessages().catch(() => undefined);
@@ -225,12 +294,20 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         otherTypingTimerRef.current = window.setTimeout(() => setIsOtherTyping(false), TYPING_EXPIRE_MS);
       }
     });
+    schedulePoll();
 
     return () => {
-      window.clearInterval(intervalId);
+      isStopped = true;
+      realtimeConnectedRef.current = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
       if (otherTypingTimerRef.current) {
         window.clearTimeout(otherTypingTimerRef.current);
       }
+      pusher.connection.unbind("state_change", handleStateChange);
       channel.unbind_all();
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();

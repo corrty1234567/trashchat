@@ -4,6 +4,7 @@ export const runtime = "nodejs";
 
 const MAX_HTML_BYTES = 256 * 1024;
 const FETCH_TIMEOUT_MS = 6000;
+const PREVIEW_CACHE_CONTROL = "public, s-maxage=86400, stale-while-revalidate=604800";
 
 function isBlockedHost(hostname: string) {
   const normalized = hostname.toLowerCase();
@@ -143,13 +144,20 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Preview unavailable." }, { status: 404 });
     }
 
-    return NextResponse.json({
-      url: url.href,
-      title,
-      description,
-      image,
-      siteName
-    });
+    return NextResponse.json(
+      {
+        url: url.href,
+        title,
+        description,
+        image,
+        siteName
+      },
+      {
+        headers: {
+          "Cache-Control": PREVIEW_CACHE_CONTROL
+        }
+      }
+    );
   } catch (error) {
     console.error("Link preview failed", error);
     return NextResponse.json({ error: "Preview unavailable." }, { status: 404 });

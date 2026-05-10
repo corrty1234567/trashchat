@@ -108,15 +108,17 @@ export async function POST(request: Request) {
     console.error("Call signal failed", error);
   }
 
-  void prisma.callSignal
-    .deleteMany({
-      where: {
-        createdAt: {
-          lt: new Date(Date.now() - 60 * 60 * 1000)
+  if (Math.random() < 0.03) {
+    void prisma.callSignal
+      .deleteMany({
+        where: {
+          createdAt: {
+            lt: new Date(Date.now() - 60 * 60 * 1000)
+          }
         }
-      }
-    })
-    .catch((error) => console.error("Old call signal cleanup failed", error));
+      })
+      .catch((error) => console.error("Old call signal cleanup failed", error));
+  }
 
   return NextResponse.json({ ok: true, realtime: didTrigger, signal: serializedSignal });
 }

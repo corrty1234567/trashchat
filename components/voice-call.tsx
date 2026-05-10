@@ -20,7 +20,9 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:global.stun.twilio.com:3478" }
 ];
-const SIGNAL_POLLING_INTERVAL_MS = 800;
+const SIGNAL_FAST_POLLING_INTERVAL_MS = 500;
+const SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS = 1500;
+const SIGNAL_BACKGROUND_POLLING_INTERVAL_MS = 6000;
 const SIGNAL_POLLING_LOOKBACK_MS = 1500;
 
 function createCallId() {
@@ -45,16 +47,17 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const callIdRef = useRef<string | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const localStreamPromiseRef = useRef<Promise<MediaStream> | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const ringtoneIntervalRef = useRef<number | null>(null);
   const seenSignalIdsRef = useRef<Set<string>>(new Set());
   const lastSignalPollAtRef = useRef(new Date(Date.now() - 5000).toISOString());
+  const pusherConnectedRef = useRef(false);
 
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
-  const isRealtimeReady = Boolean(pusherKey && pusherCluster);
 
   useEffect(() => {
     statusRef.current = status;
@@ -205,6 +208,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+    localStreamPromiseRef.current = null;
 
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = null;
@@ -230,17 +234,24 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       throw new Error("這個瀏覽器不支援語音通話。");
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      },
-      video: false
-    });
+    localStreamPromiseRef.current ??= navigator.mediaDevices
+      .getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      })
+      .then((stream) => {
+        localStreamRef.current = stream;
+        return stream;
+      })
+      .finally(() => {
+        localStreamPromiseRef.current = null;
+      });
 
-    localStreamRef.current = stream;
-    return stream;
+    return localStreamPromiseRef.current;
   }, []);
 
   const addPendingCandidates = useCallback(async () => {
@@ -315,24 +326,20 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     setError(null);
     setIsPanelOpen(true);
 
-    if (!isRealtimeReady) {
-      setError("Pusher 尚未設定，無法使用語音通話。");
-      return;
-    }
-
     const nextCallId = createCallId();
     callIdRef.current = nextCallId;
     setStatus("calling");
 
     try {
-      await getLocalStream();
       await sendSignal("call-request", nextCallId);
+      await getLocalStream();
     } catch (callError) {
+      await sendSignal("hangup", nextCallId).catch(() => undefined);
       cleanupCall();
       setIsPanelOpen(true);
       setError(callError instanceof Error ? callError.message : "無法開始語音通話。");
     }
-  }, [cleanupCall, getLocalStream, isRealtimeReady, sendSignal]);
+  }, [cleanupCall, getLocalStream, sendSignal]);
 
   const acceptCall = useCallback(async () => {
     const activeCallId = callIdRef.current;
@@ -537,12 +544,18 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       cluster: pusherCluster
     });
     const channel = pusher.subscribe(PUSHER_CHANNEL);
+    const handleStateChange = ({ current }: { current: string }) => {
+      pusherConnectedRef.current = current === "connected";
+    };
 
+    pusher.connection.bind("state_change", handleStateChange);
     channel.bind(PUSHER_EVENT_CALL_SIGNAL, (signal: CallSignal) => {
       void receiveSignal(signal);
     });
 
     return () => {
+      pusherConnectedRef.current = false;
+      pusher.connection.unbind("state_change", handleStateChange);
       channel.unbind(PUSHER_EVENT_CALL_SIGNAL);
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();
@@ -551,6 +564,37 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   useEffect(() => {
     let isStopped = false;
+    let timeoutId: number | null = null;
+
+    function getPollingDelay() {
+      if (document.hidden) {
+        return SIGNAL_BACKGROUND_POLLING_INTERVAL_MS;
+      }
+
+      if (statusRef.current !== "idle") {
+        return SIGNAL_FAST_POLLING_INTERVAL_MS;
+      }
+
+      return pusherConnectedRef.current ? SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS : SIGNAL_FAST_POLLING_INTERVAL_MS;
+    }
+
+    function schedulePoll(delay = getPollingDelay()) {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void pollSignals().finally(() => {
+          if (!isStopped) {
+            schedulePoll();
+          }
+        });
+      }, delay);
+    }
+
+    function handleVisibilityChange() {
+      schedulePoll();
+    }
 
     async function pollSignals() {
       const since = new Date(
@@ -578,20 +622,26 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
           await receiveSignal(signal);
         }
 
-        if (Number.isFinite(latestSignalTime)) {
-          lastSignalPollAtRef.current = new Date(latestSignalTime).toISOString();
-        }
+        lastSignalPollAtRef.current = new Date(Math.max(latestSignalTime, Date.now())).toISOString();
       } catch {
         // Pusher is still the primary path; polling errors are retried on the next tick.
       }
     }
 
-    void pollSignals();
-    const intervalId = window.setInterval(() => void pollSignals(), SIGNAL_POLLING_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void pollSignals().finally(() => {
+      if (!isStopped) {
+        schedulePoll();
+      }
+    });
 
     return () => {
       isStopped = true;
-      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [receiveSignal, sender]);
 

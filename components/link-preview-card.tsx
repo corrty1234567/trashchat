@@ -16,6 +16,41 @@ type LinkPreviewCardProps = {
   url: string | null;
 };
 
+const MAX_PREVIEW_CACHE_SIZE = 100;
+const previewCache = new Map<string, Promise<LinkPreview | null>>();
+
+function getCachedPreview(url: string) {
+  const cachedPreview = previewCache.get(url);
+
+  if (cachedPreview) {
+    return cachedPreview;
+  }
+
+  const previewRequest = fetch(`/api/link-preview?url=${encodeURIComponent(url)}`, {
+    cache: "force-cache"
+  })
+    .then((response) => {
+      if (!response.ok) {
+        return null;
+      }
+
+      return response.json() as Promise<LinkPreview>;
+    })
+    .catch(() => null);
+
+  previewCache.set(url, previewRequest);
+
+  if (previewCache.size > MAX_PREVIEW_CACHE_SIZE) {
+    const oldestUrl = previewCache.keys().next().value;
+
+    if (oldestUrl) {
+      previewCache.delete(oldestUrl);
+    }
+  }
+
+  return previewRequest;
+}
+
 export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   const [preview, setPreview] = useState<LinkPreview | null>(null);
   const [isUnavailable, setIsUnavailable] = useState(false);
@@ -31,28 +66,22 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
     let isMounted = true;
 
     async function loadPreview() {
+      setPreview(null);
       setIsUnavailable(false);
 
-      try {
-        const response = await fetch(`/api/link-preview?url=${encodeURIComponent(previewUrl)}`, {
-          cache: "force-cache"
-        });
+      const data = await getCachedPreview(previewUrl);
 
-        if (!response.ok) {
-          throw new Error("Preview unavailable.");
-        }
-
-        const data = (await response.json()) as LinkPreview;
-
-        if (isMounted) {
-          setPreview(data);
-        }
-      } catch {
-        if (isMounted) {
-          setPreview(null);
-          setIsUnavailable(true);
-        }
+      if (!isMounted) {
+        return;
       }
+
+      if (data) {
+        setPreview(data);
+        return;
+      }
+
+      setPreview(null);
+      setIsUnavailable(true);
     }
 
     void loadPreview();
