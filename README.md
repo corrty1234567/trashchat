@@ -39,6 +39,8 @@ cp .env.example .env
 
 ```env
 DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
+CHORCHAT_AUTH_USER="chorchat"
+CHORCHAT_AUTH_PASSWORD="change-this-password"
 BLOB_READ_WRITE_TOKEN="vercel_blob_rw_xxxxxxxxxxxxxxxxx"
 PUSHER_APP_ID="0000000"
 PUSHER_SECRET="xxxxxxxxxxxxxxxxxxxx"
@@ -75,7 +77,8 @@ npm run dev
 4. 建立 Pusher Channels app，取得 app id、key、secret、cluster。
 5. 在 Vercel 匯入 GitHub repo。
 6. 到 Vercel Project Settings 加入 `.env.example` 中的環境變數。
-7. 對 production database 執行 migration：
+7. 務必設定 `CHORCHAT_AUTH_PASSWORD`，避免公開網址被其他人直接進聊天室或呼叫 API。
+8. 對 production database 執行 migration：
 
 ```bash
 npm run db:deploy
@@ -87,6 +90,8 @@ Vercel build command 使用：
 npm run build
 ```
 
+不要在 production 使用 `npm run db:push`，production database 應使用 migration。
+
 ## 資料表
 
 Prisma schema 位於 `prisma/schema.prisma`。
@@ -97,10 +102,12 @@ Prisma schema 位於 `prisma/schema.prisma`。
 - `sender`：`CHEN` 或 `ZUO`
 - `text`
 - `image_url`
+- `image_urls`
 - `created_at`
 - `updated_at`
 - `edited_at`
 - `recalled_at`
+- `read_at`
 - `reply_to_message_id`
 
 語音通話訊號使用 `call_signals`：
