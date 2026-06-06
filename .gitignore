@@ -34,3 +34,5 @@ prisma/dev.db
 
 # TypeScript
 *.tsbuildinfo
+
+.vercel

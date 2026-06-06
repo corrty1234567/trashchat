@@ -2,9 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ChatRoom } from "@/components/chat-room";
-import { SENDER_LABEL, type Sender, isSender } from "@/lib/types";
+import { type Sender, isSender } from "@/lib/types";
 
 const STORAGE_KEY = "trashchat:sender";
+const IDENTITY_OPTIONS: Array<{ label: string; sender: Sender }> = [
+  { label: "27", sender: "CHEN" },
+  { label: "10", sender: "ZUO" }
+];
 
 export function HomeClient() {
   const [sender, setSender] = useState<Sender | null>(null);
@@ -43,32 +47,19 @@ export function HomeClient() {
   }
 
   return (
-    <main className="min-h-dvh bg-paper px-5 py-8 text-ink">
-      <section className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-5xl flex-col justify-center gap-10">
-        <div className="max-w-3xl">
-          <p className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-brand">trashchat</p>
-          <h1 className="text-4xl font-semibold leading-tight text-ink sm:text-6xl">只給陳與左的即時聊天室</h1>
-          <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
-            選擇身分後進入聊天室。自己的訊息靠右，對方的訊息靠左，文字、圖片、回覆、編輯與收回都會同步更新。
-          </p>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {(["CHEN", "ZUO"] as const).map((identity) => (
-            <button
-              key={identity}
-              type="button"
-              onClick={() => chooseSender(identity)}
-              className="group rounded-lg border border-line bg-white p-6 text-left shadow-soft transition hover:-translate-y-0.5 hover:border-brand focus:outline-none focus:ring-4 focus:ring-brand/20"
-            >
-              <span className="block text-sm font-medium text-slate-500">進入聊天室</span>
-              <span className="mt-3 block text-2xl font-semibold text-ink">以{SENDER_LABEL[identity]}的身分進入</span>
-              <span className="mt-5 inline-flex rounded-md bg-brand px-4 py-2 text-sm font-semibold text-white transition group-hover:bg-blue-600">
-                開始聊天
-              </span>
-            </button>
-          ))}
-        </div>
+    <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-[linear-gradient(135deg,#f8fafc_0%,#f3f4f6_48%,#eef2f7_100%)] px-5 py-8 text-ink">
+      <section className="grid w-full max-w-md grid-cols-2 gap-3 sm:max-w-xl sm:gap-4">
+        {IDENTITY_OPTIONS.map((option) => (
+          <button
+            key={option.sender}
+            type="button"
+            onClick={() => chooseSender(option.sender)}
+            className="flex aspect-square items-center justify-center rounded-2xl border border-white/80 bg-white/75 text-5xl font-semibold text-slate-900 shadow-[0_24px_80px_rgba(15,23,42,0.14)] backdrop-blur transition duration-300 ease-out hover:-translate-y-1 hover:scale-[1.02] hover:border-brand/40 hover:bg-white focus:outline-none focus:ring-4 focus:ring-brand/20 active:scale-[0.98] sm:text-7xl"
+            aria-label={`選擇 ${option.label}`}
+          >
+            {option.label}
+          </button>
+        ))}
       </section>
     </main>
   );
