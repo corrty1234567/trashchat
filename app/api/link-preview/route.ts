@@ -116,7 +116,7 @@ export async function GET(request: Request) {
   try {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "chorchat-link-preview/1.0",
+        "User-Agent": "trashchat-link-preview/1.0",
         Accept: "text/html,application/xhtml+xml"
       },
       redirect: "follow",

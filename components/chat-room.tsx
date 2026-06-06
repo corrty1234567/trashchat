@@ -652,7 +652,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
           </button>
 
           <div className="min-w-0 text-center">
-            <h1 className="truncate text-lg font-semibold">chorchat</h1>
+            <h1 className="truncate text-lg font-semibold">trashchat</h1>
             <p className="truncate text-xs text-slate-500">
               你是 {SENDER_LABEL[sender]}，正在與 {SENDER_LABEL[otherSender]} 對話
             </p>

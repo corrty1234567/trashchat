@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     }
 
     const fileName = safeFileName(file.name) || "image";
-    const blob = await put(`chorchat/${crypto.randomUUID()}-${fileName}`, file, {
+    const blob = await put(`trashchat/${crypto.randomUUID()}-${fileName}`, file, {
       access: "public",
       addRandomSuffix: true
     });

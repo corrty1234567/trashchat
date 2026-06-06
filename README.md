@@ -1,6 +1,6 @@
-# chorchat
+# trashchat
 
-`chorchat` 是一個只有兩種固定身分的即時聊天網站：`陳` 與 `左`。
+`trashchat` 是一個只有兩種固定身分的即時聊天網站：`陳` 與 `左`。
 
 ## 功能
 
@@ -39,8 +39,8 @@ cp .env.example .env
 
 ```env
 DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
-CHORCHAT_AUTH_USER="chorchat"
-CHORCHAT_AUTH_PASSWORD="change-this-password"
+TRASHCHAT_AUTH_USER="trashchat"
+TRASHCHAT_AUTH_PASSWORD="change-this-password"
 BLOB_READ_WRITE_TOKEN="vercel_blob_rw_xxxxxxxxxxxxxxxxx"
 PUSHER_APP_ID="0000000"
 PUSHER_SECRET="xxxxxxxxxxxxxxxxxxxx"
@@ -77,7 +77,7 @@ npm run dev
 4. 建立 Pusher Channels app，取得 app id、key、secret、cluster。
 5. 在 Vercel 匯入 GitHub repo。
 6. 到 Vercel Project Settings 加入 `.env.example` 中的環境變數。
-7. 務必設定 `CHORCHAT_AUTH_PASSWORD`，避免公開網址被其他人直接進聊天室或呼叫 API。
+7. 務必設定 `TRASHCHAT_AUTH_PASSWORD`，避免公開網址被其他人直接進聊天室或呼叫 API。
 8. 對 production database 執行 migration：
 
 ```bash

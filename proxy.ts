@@ -6,7 +6,7 @@ function unauthorized() {
     status: 401,
     headers: {
       "Cache-Control": "no-store",
-      "WWW-Authenticate": 'Basic realm="chorchat", charset="UTF-8"'
+      "WWW-Authenticate": 'Basic realm="trashchat", charset="UTF-8"'
     }
   });
 }
@@ -34,13 +34,13 @@ function parseBasicAuth(value: string | null) {
 }
 
 export function proxy(request: NextRequest) {
-  const expectedPassword = process.env.CHORCHAT_AUTH_PASSWORD;
+  const expectedPassword = process.env.TRASHCHAT_AUTH_PASSWORD;
 
   if (!expectedPassword) {
     return NextResponse.next();
   }
 
-  const expectedUser = process.env.CHORCHAT_AUTH_USER ?? "chorchat";
+  const expectedUser = process.env.TRASHCHAT_AUTH_USER ?? "trashchat";
   const credentials = parseBasicAuth(request.headers.get("authorization"));
 
   if (credentials?.user !== expectedUser || credentials.password !== expectedPassword) {
