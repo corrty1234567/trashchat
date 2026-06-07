@@ -9,22 +9,26 @@ type BrowserChatStatusProps = {
 };
 
 function createTrashIcon(hasNotification: boolean) {
-  const badge = hasNotification ? '<circle cx="48" cy="12" r="9" fill="#ef4444"/>' : "";
+  const badge = hasNotification
+    ? '<circle cx="15" cy="14" r="11" fill="#ef4444" stroke="#ffffff" stroke-width="4"/>'
+    : "";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#e2e8f0"/><path d="M24 18h16l2 5h8v6H14v-6h8l2-5Z" fill="#475569"/><path d="M19 31h26l-2 21H21l-2-21Z" fill="#64748b"/><path d="M27 36v11M37 36v11" stroke="#f8fafc" stroke-width="3" stroke-linecap="round"/>${badge}</svg>`;
 
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 function getIconLink() {
-  let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  let link = document.querySelector<HTMLLinkElement>('link[data-trashchat-icon="true"]');
 
   if (!link) {
     link = document.createElement("link");
     link.rel = "icon";
+    link.setAttribute("data-trashchat-icon", "true");
     document.head.appendChild(link);
   }
 
   link.type = "image/svg+xml";
+  link.sizes = "any";
   return link;
 }
 
