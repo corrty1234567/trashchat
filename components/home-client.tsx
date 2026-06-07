@@ -6,8 +6,8 @@ import { type Sender, isSender } from "@/lib/types";
 
 const STORAGE_KEY = "trashchat:sender";
 const IDENTITY_OPTIONS: Array<{ label: string; sender: Sender }> = [
-  { label: "27", sender: "CHEN" },
-  { label: "10", sender: "ZUO" }
+  { label: "27", sender: "ZUO" },
+  { label: "10", sender: "CHEN" }
 ];
 
 export function HomeClient() {

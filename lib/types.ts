@@ -28,8 +28,8 @@ export type ReplyMessage = {
 };
 
 export const SENDER_LABEL: Record<Sender, string> = {
-  CHEN: "陳",
-  ZUO: "左"
+  CHEN: "10",
+  ZUO: "27"
 };
 
 export const OTHER_SENDER: Record<Sender, Sender> = {
