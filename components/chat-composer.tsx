@@ -2,10 +2,11 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { ImagePlus, Send, X } from "lucide-react";
+import { AtSign, ImagePlus, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { getMentionToken } from "@/lib/mentions";
 import { getReplyPreview } from "@/lib/messages";
-import type { Message } from "@/lib/types";
+import { SENDER_LABEL, SENDER_VALUES, type Message, type Sender } from "@/lib/types";
 
 export type ComposerPayload = {
   text: string;
@@ -13,6 +14,7 @@ export type ComposerPayload = {
 };
 
 type ChatComposerProps = {
+  currentSender: Sender;
   isSending: boolean;
   replyTo: Message | null;
   editing: Message | null;
@@ -26,6 +28,7 @@ type ChatComposerProps = {
 const MAX_SELECTED_IMAGES = 10;
 
 export function ChatComposer({
+  currentSender,
   isSending,
   replyTo,
   editing,
@@ -39,6 +42,8 @@ export function ChatComposer({
   const [files, setFiles] = useState<File[]>([]);
   const [previewItems, setPreviewItems] = useState<Array<{ file: File; url: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionTargets = useMemo(() => SENDER_VALUES.filter((sender) => sender !== currentSender), [currentSender]);
 
   useEffect(() => {
     if (editing) {
@@ -98,6 +103,31 @@ export function ChatComposer({
     await onSubmit({
       text: submittedText,
       files: submittedFiles
+    });
+  }
+
+  function insertMention(sender: Sender) {
+    if (editing) {
+      return;
+    }
+
+    const token = getMentionToken(sender);
+    const textarea = textareaRef.current;
+    const selectionStart = textarea?.selectionStart ?? text.length;
+    const selectionEnd = textarea?.selectionEnd ?? text.length;
+    const before = text.slice(0, selectionStart);
+    const after = text.slice(selectionEnd);
+    const prefix = before && !/\s$/.test(before) ? " " : "";
+    const suffix = after && !/^\s/.test(after) ? " " : " ";
+    const nextText = `${before}${prefix}${token}${suffix}${after}`;
+    const cursorPosition = before.length + prefix.length + token.length + 1;
+
+    setText(nextText);
+    onTypingActivity(true);
+
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(cursorPosition, cursorPosition);
     });
   }
 
@@ -186,6 +216,26 @@ export function ChatComposer({
           </div>
         ) : null}
 
+        {!editing ? (
+          <div className="mb-2 flex items-center gap-2">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+              <AtSign size={16} />
+            </span>
+            <div className="flex min-w-0 gap-1.5 overflow-x-auto">
+              {mentionTargets.map((target) => (
+                <button
+                  key={target}
+                  type="button"
+                  onClick={() => insertMention(target)}
+                  className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-line bg-white px-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand/40 hover:bg-brand/5 hover:text-brand focus:outline-none focus:ring-4 focus:ring-brand/15"
+                >
+                  @{SENDER_LABEL[target]}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <input
             ref={fileInputRef}
@@ -211,6 +261,7 @@ export function ChatComposer({
           </button>
 
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={(event) => {
               setText(event.target.value);

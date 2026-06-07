@@ -37,6 +37,17 @@ const messageInclude = {
       editedAt: true,
       recalledAt: true
     }
+  },
+  reads: {
+    select: {
+      id: true,
+      messageId: true,
+      sender: true,
+      readAt: true
+    },
+    orderBy: {
+      readAt: "asc"
+    }
   }
 } as const;
 

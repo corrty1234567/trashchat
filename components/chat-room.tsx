@@ -3,10 +3,12 @@
 import Pusher from "pusher-js";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserChatStatus } from "@/components/browser-chat-status";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MessageBubble } from "@/components/message-bubble";
 import { VoiceCall } from "@/components/voice-call";
+import { mentionsSender } from "@/lib/mentions";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { getMessageMinuteKey } from "@/lib/time";
 import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
@@ -27,6 +29,32 @@ const TYPING_EXPIRE_MS = 3200;
 
 function sortMessagesByCreatedAt(messages: Message[]) {
   return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
+}
+
+function getIsPageActive() {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+function hasReadMessage(message: Message, sender: Sender) {
+  return (message.reads ?? []).some((read) => read.sender === sender);
+}
+
+function getUnreadIncomingMessages(messages: Message[], sender: Sender) {
+  return messages.filter(
+    (message) =>
+      message.sender !== sender &&
+      !message.clientStatus &&
+      !message.recalledAt &&
+      !hasReadMessage(message, sender)
+  );
+}
+
+function getReadByLabels(message: Message, currentSender: Sender) {
+  const readSenders = new Set(
+    (message.reads ?? []).map((read) => read.sender).filter((readSender) => readSender !== currentSender)
+  );
+
+  return [...readSenders].map((readSender) => SENDER_LABEL[readSender]);
 }
 
 function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[]) {
@@ -148,6 +176,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [typingSender, setTypingSender] = useState<Sender | null>(null);
+  const [isPageActive, setIsPageActive] = useState(true);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const loadMessagesPromiseRef = useRef<Promise<void> | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
@@ -340,6 +369,25 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     bottomRef.current?.scrollIntoView({ behavior: isLoading ? "auto" : "smooth" });
   }, [messages.length, isLoading]);
 
+  useEffect(() => {
+    function syncPageActiveState() {
+      setIsPageActive(getIsPageActive());
+    }
+
+    syncPageActiveState();
+    window.addEventListener("focus", syncPageActiveState);
+    window.addEventListener("blur", syncPageActiveState);
+    document.addEventListener("visibilitychange", syncPageActiveState);
+    document.addEventListener("pointerdown", syncPageActiveState);
+
+    return () => {
+      window.removeEventListener("focus", syncPageActiveState);
+      window.removeEventListener("blur", syncPageActiveState);
+      document.removeEventListener("visibilitychange", syncPageActiveState);
+      document.removeEventListener("pointerdown", syncPageActiveState);
+    };
+  }, []);
+
   const editingLabel = useMemo(() => {
     if (!editing) {
       return null;
@@ -348,34 +396,43 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     return editing.text || ((editing.imageUrls?.length ?? 0) > 0 || editing.imageUrl ? "圖片訊息" : "訊息");
   }, [editing]);
 
-  const latestOwnReadableMessageId = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
+  const unreadIncomingMessages = useMemo(() => getUnreadIncomingMessages(messages, sender), [messages, sender]);
 
-      if (message.sender === sender && !message.clientStatus && !message.recalledAt) {
-        return message.id;
+  const unreadMentionSender = useMemo(() => {
+    for (let index = unreadIncomingMessages.length - 1; index >= 0; index -= 1) {
+      const message = unreadIncomingMessages[index];
+
+      if (mentionsSender(message.text, sender)) {
+        return message.sender;
       }
     }
 
     return null;
-  }, [messages, sender]);
+  }, [sender, unreadIncomingMessages]);
 
   useEffect(() => {
-    const hasUnreadIncomingMessages = messages.some(
-      (message) => message.sender !== sender && !message.readAt && !message.clientStatus
-    );
-
-    if (!hasUnreadIncomingMessages) {
+    if (!isPageActive || unreadIncomingMessages.length === 0) {
       return;
     }
 
     const readAt = new Date().toISOString();
+    const unreadMessageIds = unreadIncomingMessages.map((message) => message.id);
+
     setMessages((currentMessages) =>
       currentMessages.map((message) =>
-        message.sender !== sender && !message.readAt && !message.clientStatus
+        unreadMessageIds.includes(message.id) && !hasReadMessage(message, sender)
           ? {
               ...message,
-              readAt
+              readAt: message.readAt ?? readAt,
+              reads: [
+                ...(message.reads ?? []),
+                {
+                  id: `optimistic-read-${message.id}-${sender}`,
+                  messageId: message.id,
+                  sender,
+                  readAt
+                }
+              ]
             }
           : message
       )
@@ -392,7 +449,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ sender })
+      body: JSON.stringify({ sender, messageIds: unreadMessageIds })
     })
       .then((response) => {
         if (response.ok) {
@@ -402,7 +459,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
       .finally(() => {
         readSyncRef.current = false;
       });
-  }, [loadMessages, messages, sender]);
+  }, [isPageActive, loadMessages, sender, unreadIncomingMessages]);
 
   function focusMessage(messageId: string) {
     document.getElementById(`message-${messageId}`)?.scrollIntoView({
@@ -545,6 +602,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
           editedAt: null,
           recalledAt: null,
           readAt: null,
+          reads: [],
           replyToMessageId: replyTarget?.id ?? null,
           replyTo: replyTarget ? toReplyMessage(replyTarget) : null,
           clientStatus: "sending"
@@ -638,6 +696,8 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
 
   return (
     <main className="flex h-dvh flex-col bg-paper text-ink">
+      <BrowserChatStatus unreadCount={unreadIncomingMessages.length} mentionSender={unreadMentionSender} />
+
       <header className="border-b border-line bg-white/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <button
@@ -690,11 +750,9 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
                 currentSender={sender}
                 isHighlighted={highlightedId === message.id}
                 showTimestamp={showTimestamp}
-                readReceipt={
-                  message.id === latestOwnReadableMessageId && message.sender === sender
-                    ? message.readAt
-                      ? "read"
-                      : "unread"
+                readByLabels={
+                  message.sender === sender && !message.clientStatus && !message.recalledAt
+                    ? getReadByLabels(message, sender)
                     : null
                 }
                 onReply={() => {
@@ -722,6 +780,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
       ) : null}
 
       <ChatComposer
+        currentSender={sender}
         isSending={isSending}
         replyTo={replyTo}
         editing={editing}

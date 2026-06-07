@@ -2,6 +2,7 @@
 
 import clsx from "clsx";
 import { URL_PATTERN, normalizeUrlMatch } from "@/lib/links";
+import { splitMentionText } from "@/lib/mentions";
 
 type LinkifiedTextProps = {
   text: string;
@@ -33,6 +34,24 @@ export function LinkifiedText({ text, isOwn }: LinkifiedTextProps) {
     parts.push({ type: "text", value: text.slice(lastIndex) });
   }
 
+  function renderTextPart(value: string, partIndex: number) {
+    return splitMentionText(value).map((part, mentionIndex) =>
+      part.type === "mention" ? (
+        <span
+          key={`${part.value}-${partIndex}-${mentionIndex}`}
+          className={clsx(
+            "inline-flex rounded px-1 font-semibold",
+            isOwn ? "bg-white/20 text-white" : "bg-brand/10 text-brand"
+          )}
+        >
+          {part.value}
+        </span>
+      ) : (
+        <span key={`${part.value}-${partIndex}-${mentionIndex}`}>{part.value}</span>
+      )
+    );
+  }
+
   return (
     <p className="whitespace-pre-wrap break-words text-[15px] leading-6">
       {parts.map((part, index) =>
@@ -47,7 +66,7 @@ export function LinkifiedText({ text, isOwn }: LinkifiedTextProps) {
             {part.value}
           </a>
         ) : (
-          <span key={`${part.value}-${index}`}>{part.value}</span>
+          renderTextPart(part.value, index)
         )
       )}
     </p>

@@ -17,7 +17,7 @@ type MessageBubbleProps = {
   currentSender: Sender;
   isHighlighted: boolean;
   showTimestamp: boolean;
-  readReceipt: "read" | "unread" | null;
+  readByLabels: string[] | null;
   onReply: () => void;
   onEdit: () => void;
   onRecall: () => void;
@@ -96,7 +96,7 @@ export function MessageBubble({
   currentSender,
   isHighlighted,
   showTimestamp,
-  readReceipt,
+  readByLabels,
   onReply,
   onEdit,
   onRecall,
@@ -215,9 +215,9 @@ export function MessageBubble({
 
             {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
           </div>
-          {readReceipt ? (
+          {readByLabels ? (
             <div className={clsx("px-1 text-xs text-slate-500", isOwn ? "text-right" : "text-left")}>
-              {readReceipt === "read" ? "已讀" : "未讀"}
+              {readByLabels.length > 0 ? `已讀 ${readByLabels.join("、")}` : "未讀"}
             </div>
           ) : null}
         </div>

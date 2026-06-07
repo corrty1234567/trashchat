@@ -14,8 +14,16 @@ export type Message = {
   recalledAt: string | null;
   readAt: string | null;
   replyToMessageId: string | null;
+  reads: MessageRead[];
   replyTo?: ReplyMessage | null;
   clientStatus?: "sending" | "failed";
+};
+
+export type MessageRead = {
+  id: string;
+  messageId: string;
+  sender: Sender;
+  readAt: string;
 };
 
 export type ReplyMessage = {

@@ -7,7 +7,8 @@ import { SENDER_VALUES } from "@/lib/types";
 export const runtime = "nodejs";
 
 const markReadSchema = z.object({
-  sender: z.enum(SENDER_VALUES)
+  sender: z.enum(SENDER_VALUES),
+  messageIds: z.array(z.string().cuid()).max(500).optional()
 });
 
 export async function POST(request: Request) {
@@ -17,19 +18,52 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const result = await prisma.message.updateMany({
+  const messages = await prisma.message.findMany({
     where: {
       sender: {
         not: parsed.data.sender
       },
-      readAt: null
+      recalledAt: null,
+      ...(parsed.data.messageIds?.length
+        ? {
+            id: {
+              in: parsed.data.messageIds
+            }
+          }
+        : {})
     },
-    data: {
-      readAt: new Date()
-    }
+    select: {
+      id: true
+    },
+    take: 500
+  });
+
+  if (messages.length === 0) {
+    return NextResponse.json({ marked: 0 });
+  }
+
+  const readAt = new Date();
+  const result = await prisma.messageRead.createMany({
+    data: messages.map((message) => ({
+      messageId: message.id,
+      sender: parsed.data.sender,
+      readAt
+    })),
+    skipDuplicates: true
   });
 
   if (result.count > 0) {
+    await prisma.message.updateMany({
+      where: {
+        id: {
+          in: messages.map((message) => message.id)
+        },
+        readAt: null
+      },
+      data: {
+        readAt
+      }
+    });
     await notifyMessagesChanged({ type: "read" });
   }
 

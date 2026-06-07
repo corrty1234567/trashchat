@@ -28,10 +28,24 @@ model Message {
 
   replyTo Message?  @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
   replies Message[] @relation("MessageReplies")
+  reads   MessageRead[]
 
   @@index([createdAt])
   @@index([replyToMessageId])
   @@map("messages")
+}
+
+model MessageRead {
+  id        String   @id @default(cuid())
+  messageId String   @map("message_id")
+  sender    Sender
+  readAt    DateTime @default(now()) @map("read_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, sender])
+  @@index([sender, readAt])
+  @@map("message_reads")
 }
 
 model CallSignal {
