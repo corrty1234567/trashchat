@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { triggerRealtimeEvent } from "@/lib/pusher-server";
+import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const typingSchema = z.object({
-  sender: z.enum(["CHEN", "ZUO"]),
+  sender: z.enum(SENDER_VALUES),
   isTyping: z.boolean()
 });
 

@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
+import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const messageInputSchema = z
   .object({
-    sender: z.enum(["CHEN", "ZUO"]),
+    sender: z.enum(SENDER_VALUES),
     text: z.string().trim().max(4000).optional(),
     imageUrl: z.string().url().optional(),
     imageUrls: z.array(z.string().url()).max(10).optional(),

@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "trashchat",
-  description: "Realtime chat for 10 and 27"
+  description: "Realtime chat for 10, 27, and 17"
 };
 
 export default function RootLayout({

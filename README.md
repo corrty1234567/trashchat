@@ -1,10 +1,10 @@
 # trashchat
 
-`trashchat` 是一個只有兩種固定身分的即時聊天網站：`10` 與 `27`。
+`trashchat` 是一個固定身分的即時聊天網站：`10`、`27` 與 `17`。
 
 ## 功能
 
-- 身分選擇頁：以 `10` 或 `27` 進入聊天室
+- 身分選擇頁：以 `10`、`27` 或 `17` 進入聊天室
 - 自己訊息靠右，對方訊息靠左
 - 純文字訊息、圖片訊息、文字加圖片訊息
 - 訊息時間顯示
@@ -99,7 +99,7 @@ Prisma schema 位於 `prisma/schema.prisma`。
 核心資料表為 `messages`：
 
 - `id`
-- `sender`：`CHEN` 或 `ZUO`
+- `sender`：`CHEN`、`ZUO` 或 `SEVENTEEN`
 - `text`
 - `image_url`
 - `image_urls`

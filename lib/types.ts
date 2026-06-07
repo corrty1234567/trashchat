@@ -1,4 +1,6 @@
-export type Sender = "CHEN" | "ZUO";
+export const SENDER_VALUES = ["CHEN", "ZUO", "SEVENTEEN"] as const;
+
+export type Sender = (typeof SENDER_VALUES)[number];
 
 export type Message = {
   id: string;
@@ -29,14 +31,10 @@ export type ReplyMessage = {
 
 export const SENDER_LABEL: Record<Sender, string> = {
   CHEN: "10",
-  ZUO: "27"
-};
-
-export const OTHER_SENDER: Record<Sender, Sender> = {
-  CHEN: "ZUO",
-  ZUO: "CHEN"
+  ZUO: "27",
+  SEVENTEEN: "17"
 };
 
 export function isSender(value: unknown): value is Sender {
-  return value === "CHEN" || value === "ZUO";
+  return SENDER_VALUES.includes(value as Sender);
 }

@@ -6,8 +6,9 @@ import { type Sender, isSender } from "@/lib/types";
 
 const STORAGE_KEY = "trashchat:sender";
 const IDENTITY_OPTIONS: Array<{ label: string; sender: Sender }> = [
+  { label: "10", sender: "CHEN" },
   { label: "27", sender: "ZUO" },
-  { label: "10", sender: "CHEN" }
+  { label: "17", sender: "SEVENTEEN" }
 ];
 
 export function HomeClient() {
@@ -47,14 +48,14 @@ export function HomeClient() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-[linear-gradient(135deg,#f8fafc_0%,#f3f4f6_48%,#eef2f7_100%)] px-5 py-8 text-ink">
-      <section className="grid w-full max-w-md grid-cols-2 gap-3 sm:max-w-xl sm:gap-4">
+    <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_25%,#ffffff_0%,#f1f5f9_42%,#dbeafe_100%)] px-5 py-8 text-ink">
+      <section className="grid w-full max-w-[22rem] grid-cols-1 gap-3 sm:max-w-3xl sm:grid-cols-3 sm:gap-4">
         {IDENTITY_OPTIONS.map((option) => (
           <button
             key={option.sender}
             type="button"
             onClick={() => chooseSender(option.sender)}
-            className="flex aspect-square items-center justify-center rounded-2xl border border-white/80 bg-white/75 text-5xl font-semibold text-slate-900 shadow-[0_24px_80px_rgba(15,23,42,0.14)] backdrop-blur transition duration-300 ease-out hover:-translate-y-1 hover:scale-[1.02] hover:border-brand/40 hover:bg-white focus:outline-none focus:ring-4 focus:ring-brand/20 active:scale-[0.98] sm:text-7xl"
+            className="flex aspect-[2.8/1] items-center justify-center rounded-3xl border border-white/80 bg-white/70 text-5xl font-semibold text-slate-950 shadow-[0_28px_90px_rgba(15,23,42,0.16)] backdrop-blur-xl transition duration-300 ease-out hover:-translate-y-1 hover:scale-[1.025] hover:border-brand/40 hover:bg-white/95 focus:outline-none focus:ring-4 focus:ring-brand/20 active:scale-[0.98] sm:aspect-square sm:text-7xl"
             aria-label={`選擇 ${option.label}`}
           >
             {option.label}

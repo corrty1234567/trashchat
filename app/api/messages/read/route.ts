@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
+import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const markReadSchema = z.object({
-  sender: z.enum(["CHEN", "ZUO"])
+  sender: z.enum(SENDER_VALUES)
 });
 
 export async function POST(request: Request) {

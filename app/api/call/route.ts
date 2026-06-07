@@ -4,19 +4,20 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
 import { triggerRealtimeEvent } from "@/lib/pusher-server";
+import { SENDER_VALUES, type Sender } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const callSignalSchema = z.object({
   type: z.enum(["call-request", "call-accept", "call-reject", "offer", "answer", "ice-candidate", "hangup"]),
   callId: z.string().min(8).max(120),
-  from: z.enum(["CHEN", "ZUO"]),
-  to: z.enum(["CHEN", "ZUO"]),
+  from: z.enum(SENDER_VALUES),
+  to: z.enum(SENDER_VALUES),
   payload: z.unknown().optional()
 });
 
 const getCallSignalsSchema = z.object({
-  to: z.enum(["CHEN", "ZUO"]),
+  to: z.enum(SENDER_VALUES),
   since: z.string().datetime().optional()
 });
 
@@ -32,8 +33,8 @@ function serializeSignal(signal: {
   id: string;
   type: string;
   callId: string;
-  from: "CHEN" | "ZUO";
-  to: "CHEN" | "ZUO";
+  from: Sender;
+  to: Sender;
   payload: Prisma.JsonValue | null;
   createdAt: Date;
 }) {

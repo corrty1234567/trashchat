@@ -6,10 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MessageBubble } from "@/components/message-bubble";
-import { VoiceCall } from "@/components/voice-call";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { getMessageMinuteKey } from "@/lib/time";
-import { OTHER_SENDER, SENDER_LABEL, type Message, type Sender } from "@/lib/types";
+import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
 
 type ChatRoomProps = {
   sender: Sender;
@@ -147,7 +146,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const [typingSender, setTypingSender] = useState<Sender | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const loadMessagesPromiseRef = useRef<Promise<void> | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
@@ -156,8 +155,6 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
   const otherTypingTimerRef = useRef<number | null>(null);
   const readSyncRef = useRef(false);
   const hasSentTypingRef = useRef(false);
-
-  const otherSender = OTHER_SENDER[sender];
 
   const loadMessages = useCallback(async () => {
     if (loadMessagesPromiseRef.current) {
@@ -289,10 +286,10 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         otherTypingTimerRef.current = null;
       }
 
-      setIsOtherTyping(event.isTyping);
+      setTypingSender(event.isTyping ? event.sender : null);
 
       if (event.isTyping) {
-        otherTypingTimerRef.current = window.setTimeout(() => setIsOtherTyping(false), TYPING_EXPIRE_MS);
+        otherTypingTimerRef.current = window.setTimeout(() => setTypingSender(null), TYPING_EXPIRE_MS);
       }
     });
     schedulePoll();
@@ -653,13 +650,10 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
 
           <div className="min-w-0 text-center">
             <h1 className="truncate text-lg font-semibold">trashchat</h1>
-            <p className="truncate text-xs text-slate-500">
-              你是 {SENDER_LABEL[sender]}，正在與 {SENDER_LABEL[otherSender]} 對話
-            </p>
+            <p className="truncate text-xs text-slate-500">你是 {SENDER_LABEL[sender]}</p>
           </div>
 
           <div className="flex items-center gap-2">
-            <VoiceCall sender={sender} recipient={otherSender} />
             <button
               type="button"
               onClick={() => void loadMessages()}
@@ -713,9 +707,9 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
             );
           })
         )}
-        {isOtherTyping ? (
+        {typingSender ? (
           <div className="flex justify-start px-1 text-sm text-slate-500">
-            {SENDER_LABEL[otherSender]} 正在輸入...
+            {SENDER_LABEL[typingSender]} 正在輸入...
           </div>
         ) : null}
         <div ref={bottomRef} />
