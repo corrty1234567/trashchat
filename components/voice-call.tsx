@@ -1,19 +1,18 @@
 "use client";
 
 import clsx from "clsx";
-import { Mic, MicOff, Phone, PhoneCall, PhoneOff, X } from "lucide-react";
+import { Loader2, Mic, MicOff, Phone, PhoneCall, PhoneOff, X } from "lucide-react";
 import Pusher from "pusher-js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CallSignal, CallSignalType } from "@/lib/call";
 import { PUSHER_CHANNEL, PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
-import { SENDER_LABEL, type Sender } from "@/lib/types";
+import { SENDER_LABEL, SENDER_VALUES, type Sender } from "@/lib/types";
 
 type CallStatus = "idle" | "calling" | "ringing" | "connecting" | "active";
 type RingMode = "outgoing" | "incoming";
 
 type VoiceCallProps = {
   sender: Sender;
-  recipient: Sender;
 };
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -24,6 +23,7 @@ const SIGNAL_FAST_POLLING_INTERVAL_MS = 500;
 const SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS = 1500;
 const SIGNAL_BACKGROUND_POLLING_INTERVAL_MS = 6000;
 const SIGNAL_POLLING_LOOKBACK_MS = 1500;
+const OUTGOING_CALL_TIMEOUT_MS = 45000;
 
 function createCallId() {
   if (globalThis.crypto?.randomUUID) {
@@ -38,12 +38,14 @@ async function readApiError(response: Response, fallback: string) {
   return typeof data?.error === "string" ? data.error : fallback;
 }
 
-export function VoiceCall({ sender, recipient }: VoiceCallProps) {
+export function VoiceCall({ sender }: VoiceCallProps) {
   const [status, setStatus] = useState<CallStatus>("idle");
+  const [activePeer, setActivePeer] = useState<Sender | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const statusRef = useRef(status);
+  const activePeerRef = useRef<Sender | null>(activePeer);
   const callIdRef = useRef<string | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -52,21 +54,22 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const ringtoneIntervalRef = useRef<number | null>(null);
+  const outgoingTimeoutRef = useRef<number | null>(null);
   const seenSignalIdsRef = useRef<Set<string>>(new Set());
   const lastSignalPollAtRef = useRef(new Date(Date.now() - 5000).toISOString());
   const pusherConnectedRef = useRef(false);
 
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+  const peerOptions = useMemo(() => SENDER_VALUES.filter((option) => option !== sender), [sender]);
 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
   useEffect(() => {
-    seenSignalIdsRef.current.clear();
-    lastSignalPollAtRef.current = new Date(Date.now() - 5000).toISOString();
-  }, [sender]);
+    activePeerRef.current = activePeer;
+  }, [activePeer]);
 
   const getAudioContext = useCallback(() => {
     const WebAudioContext =
@@ -93,6 +96,13 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     if (ringtoneIntervalRef.current) {
       window.clearInterval(ringtoneIntervalRef.current);
       ringtoneIntervalRef.current = null;
+    }
+  }, []);
+
+  const clearOutgoingTimeout = useCallback(() => {
+    if (outgoingTimeoutRef.current) {
+      window.clearTimeout(outgoingTimeoutRef.current);
+      outgoingTimeoutRef.current = null;
     }
   }, []);
 
@@ -179,7 +189,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   }, [startRingtone, status, stopRingtone]);
 
   const sendSignal = useCallback(
-    async (type: CallSignalType, nextCallId: string, payload?: CallSignal["payload"]) => {
+    async (type: CallSignalType, nextCallId: string, to: Sender, payload?: CallSignal["payload"]) => {
       const response = await fetch("/api/call", {
         method: "POST",
         headers: {
@@ -189,22 +199,25 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
           type,
           callId: nextCallId,
           from: sender,
-          to: recipient,
+          to,
           payload
         })
       });
 
       if (!response.ok) {
-        throw new Error(await readApiError(response, "通話訊號傳送失敗。"));
+        throw new Error(await readApiError(response, "語音通話訊號送出失敗。"));
       }
     },
-    [recipient, sender]
+    [sender]
   );
 
   const cleanupCall = useCallback(() => {
     stopRingtone();
-    peerConnectionRef.current?.close();
+    clearOutgoingTimeout();
+
+    const peerConnection = peerConnectionRef.current;
     peerConnectionRef.current = null;
+    peerConnection?.close();
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
@@ -216,11 +229,17 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
     pendingCandidatesRef.current = [];
     callIdRef.current = null;
+    activePeerRef.current = null;
+    setActivePeer(null);
     setStatus("idle");
     setIsMuted(false);
-  }, [stopRingtone]);
+  }, [clearOutgoingTimeout, stopRingtone]);
 
   const closePanel = useCallback(() => {
+    if (statusRef.current !== "idle") {
+      return;
+    }
+
     setError(null);
     setIsPanelOpen(false);
   }, []);
@@ -278,8 +297,10 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       });
 
       peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          void sendSignal("ice-candidate", nextCallId, {
+        const peer = activePeerRef.current;
+
+        if (event.candidate && peer) {
+          void sendSignal("ice-candidate", nextCallId, peer, {
             candidate: event.candidate.toJSON()
           });
         }
@@ -297,8 +318,14 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       };
 
       peerConnection.onconnectionstatechange = () => {
-        if (["failed", "closed"].includes(peerConnection.connectionState)) {
+        if (peerConnectionRef.current !== peerConnection) {
+          return;
+        }
+
+        if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
           cleanupCall();
+          setIsPanelOpen(true);
+          setError("語音連線中斷，請重新撥打。");
         }
       };
 
@@ -311,7 +338,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
   const addLocalTracks = useCallback(
     async (peerConnection: RTCPeerConnection) => {
       const localStream = await getLocalStream();
-      const existingTrackIds = new Set(peerConnection.getSenders().map((sender) => sender.track?.id));
+      const existingTrackIds = new Set(peerConnection.getSenders().map((senderTrack) => senderTrack.track?.id));
 
       localStream.getTracks().forEach((track) => {
         if (!existingTrackIds.has(track.id)) {
@@ -322,29 +349,57 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     [getLocalStream]
   );
 
-  const startCall = useCallback(async () => {
-    setError(null);
-    setIsPanelOpen(true);
+  const startOutgoingTimeout = useCallback(
+    (nextCallId: string, peer: Sender) => {
+      clearOutgoingTimeout();
+      outgoingTimeoutRef.current = window.setTimeout(() => {
+        if (callIdRef.current !== nextCallId || statusRef.current !== "calling") {
+          return;
+        }
 
-    const nextCallId = createCallId();
-    callIdRef.current = nextCallId;
-    setStatus("calling");
+        void sendSignal("hangup", nextCallId, peer).catch(() => undefined);
+        cleanupCall();
+        setIsPanelOpen(true);
+        setError(`${SENDER_LABEL[peer]} 沒有回應。`);
+      }, OUTGOING_CALL_TIMEOUT_MS);
+    },
+    [cleanupCall, clearOutgoingTimeout, sendSignal]
+  );
 
-    try {
-      await sendSignal("call-request", nextCallId);
-      await getLocalStream();
-    } catch (callError) {
-      await sendSignal("hangup", nextCallId).catch(() => undefined);
-      cleanupCall();
+  const startCall = useCallback(
+    async (peer: Sender) => {
+      if (peer === sender || statusRef.current !== "idle") {
+        return;
+      }
+
+      setError(null);
       setIsPanelOpen(true);
-      setError(callError instanceof Error ? callError.message : "無法開始語音通話。");
-    }
-  }, [cleanupCall, getLocalStream, sendSignal]);
+      setActivePeer(peer);
+      activePeerRef.current = peer;
+
+      const nextCallId = createCallId();
+      callIdRef.current = nextCallId;
+      setStatus("calling");
+      startOutgoingTimeout(nextCallId, peer);
+
+      try {
+        await sendSignal("call-request", nextCallId, peer);
+        await getLocalStream();
+      } catch (callError) {
+        await sendSignal("hangup", nextCallId, peer).catch(() => undefined);
+        cleanupCall();
+        setIsPanelOpen(true);
+        setError(callError instanceof Error ? callError.message : "無法開始語音通話。");
+      }
+    },
+    [cleanupCall, getLocalStream, sender, sendSignal, startOutgoingTimeout]
+  );
 
   const acceptCall = useCallback(async () => {
     const activeCallId = callIdRef.current;
+    const peer = activePeerRef.current;
 
-    if (!activeCallId) {
+    if (!activeCallId || !peer) {
       return;
     }
 
@@ -354,33 +409,38 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     try {
       const peerConnection = createPeerConnection(activeCallId);
       await addLocalTracks(peerConnection);
-      await sendSignal("call-accept", activeCallId);
+      await sendSignal("call-accept", activeCallId, peer);
     } catch (callError) {
-      await sendSignal("hangup", activeCallId).catch(() => undefined);
+      await sendSignal("hangup", activeCallId, peer).catch(() => undefined);
       cleanupCall();
+      setIsPanelOpen(true);
       setError(callError instanceof Error ? callError.message : "無法接聽語音通話。");
     }
   }, [addLocalTracks, cleanupCall, createPeerConnection, sendSignal]);
 
   const rejectCall = useCallback(async () => {
     const activeCallId = callIdRef.current;
+    const peer = activePeerRef.current;
 
-    if (activeCallId) {
-      await sendSignal("call-reject", activeCallId).catch(() => undefined);
+    if (activeCallId && peer) {
+      await sendSignal("call-reject", activeCallId, peer).catch(() => undefined);
     }
 
     cleanupCall();
+    setError(null);
     setIsPanelOpen(false);
   }, [cleanupCall, sendSignal]);
 
   const hangUp = useCallback(async () => {
     const activeCallId = callIdRef.current;
+    const peer = activePeerRef.current;
 
-    if (activeCallId) {
-      await sendSignal("hangup", activeCallId).catch(() => undefined);
+    if (activeCallId && peer) {
+      await sendSignal("hangup", activeCallId, peer).catch(() => undefined);
     }
 
     cleanupCall();
+    setError(null);
     setIsPanelOpen(false);
   }, [cleanupCall, sendSignal]);
 
@@ -418,42 +478,47 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   const handleSignal = useCallback(
     async (signal: CallSignal) => {
-      if (signal.to !== sender || signal.from !== recipient) {
+      if (signal.to !== sender || signal.from === sender) {
         return;
       }
 
       if (signal.type === "call-request") {
         if (statusRef.current !== "idle") {
-          await sendSignal("call-reject", signal.callId).catch(() => undefined);
+          await sendSignal("call-reject", signal.callId, signal.from).catch(() => undefined);
           return;
         }
 
         callIdRef.current = signal.callId;
+        activePeerRef.current = signal.from;
+        setActivePeer(signal.from);
         setIsPanelOpen(true);
         setError(null);
         setStatus("ringing");
         return;
       }
 
-      if (signal.callId !== callIdRef.current) {
+      const peer = activePeerRef.current;
+
+      if (!peer || signal.from !== peer || signal.callId !== callIdRef.current) {
         return;
       }
 
       if (signal.type === "call-reject") {
         cleanupCall();
         setIsPanelOpen(true);
-        setError(`${SENDER_LABEL[recipient]} 沒有接聽。`);
+        setError(`${SENDER_LABEL[peer]} 沒有接聽。`);
         return;
       }
 
       if (signal.type === "hangup") {
         cleanupCall();
         setIsPanelOpen(true);
-        setError(`${SENDER_LABEL[recipient]} 已掛斷。`);
+        setError(`${SENDER_LABEL[peer]} 已掛斷。`);
         return;
       }
 
       if (signal.type === "call-accept") {
+        clearOutgoingTimeout();
         setStatus("connecting");
 
         try {
@@ -461,9 +526,9 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
           await addLocalTracks(peerConnection);
           const offer = await peerConnection.createOffer();
           await peerConnection.setLocalDescription(offer);
-          await sendSignal("offer", signal.callId, { offer });
+          await sendSignal("offer", signal.callId, peer, { offer });
         } catch (callError) {
-          await sendSignal("hangup", signal.callId).catch(() => undefined);
+          await sendSignal("hangup", signal.callId, peer).catch(() => undefined);
           cleanupCall();
           setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
@@ -480,10 +545,10 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
           await addPendingCandidates();
           const answer = await peerConnection.createAnswer();
           await peerConnection.setLocalDescription(answer);
-          await sendSignal("answer", signal.callId, { answer });
+          await sendSignal("answer", signal.callId, peer, { answer });
           setStatus("connecting");
         } catch (callError) {
-          await sendSignal("hangup", signal.callId).catch(() => undefined);
+          await sendSignal("hangup", signal.callId, peer).catch(() => undefined);
           cleanupCall();
           setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
@@ -517,8 +582,8 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       addLocalTracks,
       addPendingCandidates,
       cleanupCall,
+      clearOutgoingTimeout,
       createPeerConnection,
-      recipient,
       sendSignal,
       sender
     ]
@@ -534,6 +599,12 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
     },
     [handleSignal, markSignalSeen]
   );
+
+  useEffect(() => {
+    seenSignalIdsRef.current.clear();
+    lastSignalPollAtRef.current = new Date(Date.now() - 5000).toISOString();
+    cleanupCall();
+  }, [cleanupCall, sender]);
 
   useEffect(() => {
     if (!pusherKey || !pusherCluster) {
@@ -624,7 +695,7 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
         lastSignalPollAtRef.current = new Date(Math.max(latestSignalTime, Date.now())).toISOString();
       } catch {
-        // Pusher is still the primary path; polling errors are retried on the next tick.
+        // Pusher is the primary path; polling retries on the next tick.
       }
     }
 
@@ -647,30 +718,48 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
 
   useEffect(() => {
     return () => {
-      stopRingtone();
       cleanupCall();
     };
-  }, [cleanupCall, stopRingtone]);
+  }, [cleanupCall]);
 
   const showCallPanel = isPanelOpen || status !== "idle" || Boolean(error);
+  const activePeerLabel = activePeer ? SENDER_LABEL[activePeer] : null;
   const statusText =
     status === "calling"
-      ? `正在撥打 ${SENDER_LABEL[recipient]}`
+      ? `正在撥打 ${activePeerLabel}`
       : status === "ringing"
-        ? `${SENDER_LABEL[recipient]} 來電`
+        ? `${activePeerLabel} 來電`
         : status === "connecting"
-          ? "語音連線中"
+          ? "正在建立連線"
           : status === "active"
-            ? `與 ${SENDER_LABEL[recipient]} 通話中`
-            : error;
+            ? `與 ${activePeerLabel} 通話中`
+            : "語音通話";
+  const detailText =
+    status === "calling"
+      ? "等待對方接聽"
+      : status === "ringing"
+        ? "選擇接聽或拒接"
+        : status === "connecting"
+          ? "正在交換加密音訊"
+          : status === "active"
+            ? isMuted
+              ? "你的麥克風已靜音"
+              : "麥克風已開啟"
+            : "選擇要撥打的身分";
 
   return (
     <>
       <button
         type="button"
-        onClick={() => void startCall()}
-        disabled={status !== "idle"}
-        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+        onClick={() => setIsPanelOpen(true)}
+        className={clsx(
+          "inline-flex h-10 w-10 items-center justify-center rounded-md border transition focus:outline-none focus:ring-4 focus:ring-brand/20",
+          status === "active"
+            ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
+            : status !== "idle"
+              ? "border-brand/30 bg-brand/10 text-brand hover:bg-brand/15"
+              : "border-line text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+        )}
         aria-label="語音通話"
         title="語音通話"
       >
@@ -680,75 +769,130 @@ export function VoiceCall({ sender, recipient }: VoiceCallProps) {
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {showCallPanel ? (
-        <div className="fixed right-4 top-20 z-[1000] w-[min(calc(100vw-2rem),380px)] rounded-lg border border-line bg-white p-3 shadow-soft">
-          <div className="flex items-center gap-3">
-            <div
-              className={clsx(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-md",
-                status === "active" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-700"
-              )}
-            >
-              <PhoneCall size={18} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-ink">{statusText}</p>
-              {error ? <p className="mt-0.5 text-xs text-red-600">{error}</p> : null}
-            </div>
-            {status === "idle" ? (
-              <button
-                type="button"
-                onClick={closePanel}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-                aria-label="關閉"
+        <div className="fixed right-4 top-20 z-[1000] w-[min(calc(100vw-2rem),390px)] overflow-hidden rounded-lg border border-line bg-white shadow-soft">
+          <div className="border-b border-line bg-slate-50/80 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div
+                className={clsx(
+                  "flex h-11 w-11 shrink-0 items-center justify-center rounded-md",
+                  status === "active"
+                    ? "bg-green-100 text-green-700"
+                    : status === "ringing"
+                      ? "bg-brand/10 text-brand"
+                      : "bg-white text-slate-700 shadow-sm"
+                )}
               >
-                <X size={18} />
-              </button>
-            ) : null}
+                {status === "connecting" ? <Loader2 className="animate-spin" size={19} /> : <PhoneCall size={19} />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-ink">{statusText}</p>
+                <p className="mt-0.5 truncate text-xs text-slate-500">{detailText}</p>
+              </div>
+              {status === "idle" ? (
+                <button
+                  type="button"
+                  onClick={closePanel}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-white hover:text-slate-900"
+                  aria-label="關閉"
+                >
+                  <X size={18} />
+                </button>
+              ) : null}
+            </div>
           </div>
 
-          {status !== "idle" ? (
-            <div className="mt-3 flex justify-end gap-2">
-              {status === "ringing" ? (
-                <>
+          <div className="p-4">
+            {error ? (
+              <div className="mb-3 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {status === "idle" ? (
+              <div className="grid grid-cols-2 gap-2">
+                {peerOptions.map((peer) => (
                   <button
+                    key={peer}
                     type="button"
-                    onClick={() => void rejectCall()}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
-                    aria-label="拒接"
+                    onClick={() => void startCall(peer)}
+                    className="group flex min-h-20 flex-col items-start justify-between rounded-md border border-line bg-white p-3 text-left transition hover:border-brand/40 hover:bg-brand/5 focus:outline-none focus:ring-4 focus:ring-brand/15"
                   >
-                    <PhoneOff size={18} />
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-sm font-semibold text-slate-700 transition group-hover:bg-brand group-hover:text-white">
+                      {SENDER_LABEL[peer]}
+                    </span>
+                    <span className="text-xs font-medium text-slate-500">撥打</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void acceptCall()}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-green-600 text-white hover:bg-green-700"
-                    aria-label="接聽"
-                  >
-                    <PhoneCall size={18} />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={toggleMute}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 hover:bg-slate-50"
-                    aria-label={isMuted ? "取消靜音" : "靜音"}
-                  >
-                    {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void hangUp()}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
-                    aria-label="掛斷"
-                  >
-                    <PhoneOff size={18} />
-                  </button>
-                </>
-              )}
-            </div>
-          ) : null}
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="rounded-md border border-line bg-slate-50 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-slate-500">對方</p>
+                      <p className="truncate text-base font-semibold text-ink">{activePeerLabel}</p>
+                    </div>
+                    <span
+                      className={clsx(
+                        "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium",
+                        status === "active" ? "bg-green-100 text-green-700" : "bg-brand/10 text-brand"
+                      )}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                      {status === "active" ? "通話中" : status === "ringing" ? "來電" : "連線中"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  {status === "ringing" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void rejectCall()}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-md bg-red-600 text-white transition hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-200"
+                        aria-label="拒接"
+                      >
+                        <PhoneOff size={19} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void acceptCall()}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-md bg-green-600 text-white transition hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-200"
+                        aria-label="接聽"
+                      >
+                        <PhoneCall size={19} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={toggleMute}
+                        className={clsx(
+                          "inline-flex h-11 w-11 items-center justify-center rounded-md border transition focus:outline-none focus:ring-4 focus:ring-brand/15",
+                          isMuted
+                            ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            : "border-line text-slate-700 hover:bg-slate-50"
+                        )}
+                        aria-label={isMuted ? "取消靜音" : "靜音"}
+                      >
+                        {isMuted ? <MicOff size={19} /> : <Mic size={19} />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void hangUp()}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-md bg-red-600 text-white transition hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-200"
+                        aria-label="掛斷"
+                      >
+                        <PhoneOff size={19} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
     </>
