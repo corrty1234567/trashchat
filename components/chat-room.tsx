@@ -818,7 +818,28 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   }
 
   async function handleRecall(message: Message) {
+    const recalledAt = new Date().toISOString();
+    const optimisticRecalledMessage: Message = {
+      ...message,
+      text: null,
+      imageUrl: null,
+      imageUrls: [],
+      updatedAt: recalledAt,
+      recalledAt
+    };
+
     setError(null);
+    setMessages((currentMessages) => {
+      const nextMessages = currentMessages.map((currentMessage) =>
+        currentMessage.id === message.id ? optimisticRecalledMessage : currentMessage
+      );
+      messagesRef.current = nextMessages;
+      return nextMessages;
+    });
+
+    if (editing?.id === message.id) {
+      setEditing(null);
+    }
 
     try {
       const response = await fetch(`/api/messages/${message.id}`, {
@@ -833,12 +854,25 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         throw new Error("收回失敗");
       }
 
-      if (editing?.id === message.id) {
-        setEditing(null);
-      }
+      const data = (await response.json()) as { message?: Message };
 
-      await loadMessages();
+      if (data.message) {
+        setMessages((currentMessages) => {
+          const nextMessages = currentMessages.map((currentMessage) =>
+            currentMessage.id === message.id ? data.message ?? currentMessage : currentMessage
+          );
+          messagesRef.current = nextMessages;
+          return nextMessages;
+        });
+      }
     } catch (recallError) {
+      setMessages((currentMessages) => {
+        const nextMessages = currentMessages.map((currentMessage) =>
+          currentMessage.id === message.id ? message : currentMessage
+        );
+        messagesRef.current = nextMessages;
+        return nextMessages;
+      });
       setError(recallError instanceof Error ? recallError.message : "收回失敗");
     }
   }
