@@ -25,6 +25,12 @@ const createMessageSchema = z.union([
   })
 ]);
 
+const getMessagesSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(80),
+  beforeCreatedAt: z.string().datetime().optional(),
+  beforeId: z.string().optional()
+});
+
 const messageInclude = {
   replyTo: {
     select: {
@@ -62,15 +68,53 @@ function getImageUrls(message: MessageInput) {
   return urls.slice(0, 10);
 }
 
-export async function GET() {
-  const messages = await prisma.message.findMany({
-    orderBy: {
-      createdAt: "asc"
-    },
-    include: messageInclude
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const parsed = getMessagesSchema.safeParse({
+    limit: searchParams.get("limit") ?? undefined,
+    beforeCreatedAt: searchParams.get("beforeCreatedAt") ?? undefined,
+    beforeId: searchParams.get("beforeId") ?? undefined
   });
 
-  return NextResponse.json({ messages });
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const beforeCreatedAt = parsed.data.beforeCreatedAt ? new Date(parsed.data.beforeCreatedAt) : null;
+  const messagesDesc = await prisma.message.findMany({
+    where:
+      beforeCreatedAt && parsed.data.beforeId
+        ? {
+            OR: [
+              {
+                createdAt: {
+                  lt: beforeCreatedAt
+                }
+              },
+              {
+                createdAt: beforeCreatedAt,
+                id: {
+                  lt: parsed.data.beforeId
+                }
+              }
+            ]
+          }
+        : undefined,
+    orderBy: [
+      {
+        createdAt: "desc"
+      },
+      {
+        id: "desc"
+      }
+    ],
+    take: parsed.data.limit + 1,
+    include: messageInclude
+  });
+  const hasMore = messagesDesc.length > parsed.data.limit;
+  const messages = messagesDesc.slice(0, parsed.data.limit).reverse();
+
+  return NextResponse.json({ messages, hasMore });
 }
 
 export async function POST(request: Request) {

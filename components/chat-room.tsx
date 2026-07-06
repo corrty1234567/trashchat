@@ -22,16 +22,36 @@ type ChatRoomProps = {
 };
 
 const ADMIN_SENDER_ID = "CHEN";
+const ADMIN_TITLE_TEXT = "trashchat";
 const ADMIN_TITLE_TRIGGER = "chashtrat";
 
 const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1500;
 const MESSAGE_REALTIME_HEALTH_CHECK_MS = 15000;
 const MESSAGE_BACKGROUND_POLLING_INTERVAL_MS = 30000;
+const INITIAL_MESSAGE_LIMIT = 80;
+const OLDER_MESSAGE_LIMIT = 80;
+const OLDER_MESSAGE_LOAD_DELAY_MS = 180;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
 const TYPING_IDLE_MS = 1200;
 const TYPING_EXPIRE_MS = 3200;
+
+type TitleLetter = {
+  id: string;
+  value: string;
+};
+
+function createTitleLetters() {
+  return [...ADMIN_TITLE_TEXT].map((value, index) => ({
+    id: `${value}-${index}`,
+    value
+  }));
+}
+
+function getTitleText(letters: TitleLetter[]) {
+  return letters.map((letter) => letter.value).join("");
+}
 
 function sortMessagesByCreatedAt(messages: Message[]) {
   return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
@@ -64,12 +84,30 @@ function getReadByLabels(message: Message, currentSender: Sender, members: reado
 }
 
 function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[]) {
-  const loadedIds = new Set(loadedMessages.map((message) => message.id));
-  const pendingMessages = currentMessages.filter(
-    (message) => message.clientStatus && message.id.startsWith("optimistic-") && !loadedIds.has(message.id)
-  );
+  const messagesById = new Map(currentMessages.map((message) => [message.id, message]));
 
-  return sortMessagesByCreatedAt([...loadedMessages, ...pendingMessages]);
+  loadedMessages.forEach((message) => {
+    messagesById.set(message.id, message);
+  });
+
+  return sortMessagesByCreatedAt([...messagesById.values()]);
+}
+
+function getMessagePageUrl(limit: number, beforeMessage?: Message) {
+  const searchParams = new URLSearchParams({
+    limit: String(limit)
+  });
+
+  if (beforeMessage) {
+    searchParams.set("beforeCreatedAt", beforeMessage.createdAt);
+    searchParams.set("beforeId", beforeMessage.id);
+  }
+
+  return `/api/messages?${searchParams.toString()}`;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function getOptimisticId() {
@@ -178,7 +216,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
-  const [secretTitle, setSecretTitle] = useState("trashchat");
+  const [titleLetters, setTitleLetters] = useState<TitleLetter[]>(() => createTitleLetters());
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
@@ -186,7 +224,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [typingSender, setTypingSender] = useState<Sender | null>(null);
   const [isPageActive, setIsPageActive] = useState(true);
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const loadMessagesPromiseRef = useRef<Promise<void> | null>(null);
+  const loadMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
+  const loadOlderMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const draggedTitleIndexRef = useRef<number | null>(null);
+  const hasMoreOlderMessagesRef = useRef(true);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
   const realtimeConnectedRef = useRef(false);
   const typingStopTimerRef = useRef<number | null>(null);
@@ -194,13 +236,25 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const readSyncRef = useRef(false);
   const hasSentTypingRef = useRef(false);
 
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const mergeMessagesIntoState = useCallback((loadedMessages: Message[]) => {
+    setMessages((currentMessages) => {
+      const mergedMessages = mergeLoadedMessages(currentMessages, loadedMessages);
+      messagesRef.current = mergedMessages;
+      return mergedMessages;
+    });
+  }, []);
+
   const loadMessages = useCallback(async () => {
     if (loadMessagesPromiseRef.current) {
       return loadMessagesPromiseRef.current;
     }
 
     const request = (async () => {
-      const response = await fetch("/api/messages", {
+      const response = await fetch(getMessagePageUrl(INITIAL_MESSAGE_LIMIT), {
         cache: "no-store"
       });
 
@@ -208,27 +262,87 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         throw new Error("無法載入訊息");
       }
 
-      const data = (await response.json()) as { messages: Message[] };
-      setMessages((currentMessages) => mergeLoadedMessages(currentMessages, data.messages));
+      const data = (await response.json()) as { messages: Message[]; hasMore: boolean };
+      hasMoreOlderMessagesRef.current = data.hasMore || hasMoreOlderMessagesRef.current;
+      mergeMessagesIntoState(data.messages);
+      return data;
     })();
 
     loadMessagesPromiseRef.current = request;
 
     try {
-      await request;
+      return await request;
     } finally {
       if (loadMessagesPromiseRef.current === request) {
         loadMessagesPromiseRef.current = null;
       }
     }
-  }, []);
+  }, [mergeMessagesIntoState]);
+
+  const loadOlderMessages = useCallback(
+    async (beforeMessage?: Message) => {
+      if (loadOlderMessagesPromiseRef.current) {
+        return loadOlderMessagesPromiseRef.current;
+      }
+
+      const oldestMessage =
+        beforeMessage ??
+        messagesRef.current.find((message) => !message.clientStatus && !message.id.startsWith("optimistic-"));
+
+      if (!oldestMessage || !hasMoreOlderMessagesRef.current) {
+        return {
+          messages: [],
+          hasMore: false
+        };
+      }
+
+      const request = (async () => {
+        const response = await fetch(getMessagePageUrl(OLDER_MESSAGE_LIMIT, oldestMessage), {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          throw new Error("無法載入舊訊息");
+        }
+
+        const data = (await response.json()) as { messages: Message[]; hasMore: boolean };
+        hasMoreOlderMessagesRef.current = data.hasMore;
+        mergeMessagesIntoState(data.messages);
+        return data;
+      })();
+
+      loadOlderMessagesPromiseRef.current = request;
+
+      try {
+        return await request;
+      } finally {
+        if (loadOlderMessagesPromiseRef.current === request) {
+          loadOlderMessagesPromiseRef.current = null;
+        }
+      }
+    },
+    [mergeMessagesIntoState]
+  );
 
   useEffect(() => {
     let isMounted = true;
 
     async function init() {
       try {
-        await loadMessages();
+        const firstPage = await loadMessages();
+
+        if (isMounted) {
+          setIsLoading(false);
+        }
+
+        let nextPage = firstPage;
+        let beforeMessage = firstPage.messages[0];
+
+        while (isMounted && nextPage.hasMore && beforeMessage) {
+          await delay(OLDER_MESSAGE_LOAD_DELAY_MS);
+          nextPage = await loadOlderMessages(beforeMessage);
+          beforeMessage = nextPage.messages[0] ?? beforeMessage;
+        }
       } catch (loadError) {
         if (isMounted) {
           setError(loadError instanceof Error ? loadError.message : "無法載入訊息");
@@ -245,7 +359,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     return () => {
       isMounted = false;
     };
-  }, [loadMessages, sender]);
+  }, [loadMessages, loadOlderMessages, sender]);
 
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
@@ -373,9 +487,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     };
   }, []);
 
+  const latestMessageId = messages[messages.length - 1]?.id ?? null;
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: isLoading ? "auto" : "smooth" });
-  }, [messages.length, isLoading]);
+  }, [isLoading, latestMessageId]);
 
   useEffect(() => {
     function syncPageActiveState() {
@@ -702,13 +818,30 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     setEditing(message);
   }
 
-  function handleSecretTitleChange(value: string) {
-    setSecretTitle(value);
-
-    if (sender === ADMIN_SENDER_ID && value.trim().toLowerCase() === ADMIN_TITLE_TRIGGER) {
-      setIsAdminOpen(true);
-      setSecretTitle("trashchat");
+  function moveTitleLetter(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) {
+      return;
     }
+
+    setTitleLetters((currentLetters) => {
+      const nextLetters = [...currentLetters];
+      const [movedLetter] = nextLetters.splice(fromIndex, 1);
+
+      if (!movedLetter) {
+        return currentLetters;
+      }
+
+      nextLetters.splice(toIndex, 0, movedLetter);
+
+      if (sender === ADMIN_SENDER_ID && getTitleText(nextLetters).toLowerCase() === ADMIN_TITLE_TRIGGER) {
+        window.setTimeout(() => {
+          setIsAdminOpen(true);
+          setTitleLetters(createTitleLetters());
+        }, 0);
+      }
+
+      return nextLetters;
+    });
   }
 
   return (
@@ -728,15 +861,35 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
           <div className="min-w-0 text-center">
             {sender === ADMIN_SENDER_ID ? (
-              <input
-                value={secretTitle}
-                onChange={(event) => handleSecretTitleChange(event.target.value)}
-                onBlur={() => setSecretTitle("trashchat")}
-                maxLength={18}
-                spellCheck={false}
-                aria-label="trashchat"
-                className="w-[9.5ch] rounded-md border border-transparent bg-transparent px-1 text-center text-lg font-semibold outline-none transition focus:border-line focus:bg-white focus:ring-4 focus:ring-brand/10"
-              />
+              <div className="flex justify-center text-lg font-semibold" aria-label="拖曳 trashchat 字母">
+                {titleLetters.map((letter, index) => (
+                  <span
+                    key={letter.id}
+                    role="button"
+                    tabIndex={0}
+                    draggable
+                    onDragStart={() => {
+                      draggedTitleIndexRef.current = index;
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const fromIndex = draggedTitleIndexRef.current;
+                      draggedTitleIndexRef.current = null;
+
+                      if (fromIndex !== null) {
+                        moveTitleLetter(fromIndex, index);
+                      }
+                    }}
+                    onDragEnd={() => {
+                      draggedTitleIndexRef.current = null;
+                    }}
+                    className="inline-flex h-7 min-w-[0.62rem] cursor-grab select-none items-center justify-center rounded px-0.5 text-slate-950 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-brand/20 active:cursor-grabbing"
+                  >
+                    {letter.value}
+                  </span>
+                ))}
+              </div>
             ) : (
               <h1 className="truncate text-lg font-semibold">trashchat</h1>
             )}
