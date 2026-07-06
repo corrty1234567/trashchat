@@ -68,6 +68,19 @@ function getImageUrls(message: MessageInput) {
   return urls.slice(0, 10);
 }
 
+function createMessage(message: MessageInput) {
+  return prisma.message.create({
+    data: {
+      imageUrls: getImageUrls(message),
+      sender: message.sender,
+      text: message.text?.trim() || null,
+      imageUrl: getImageUrls(message)[0] ?? null,
+      replyToMessageId: message.replyToMessageId ?? null
+    },
+    include: messageInclude
+  });
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const parsed = getMessagesSchema.safeParse({
@@ -155,22 +168,10 @@ export async function POST(request: Request) {
     }
   }
 
-  const messages = await prisma.$transaction(
-    messageInputs.map((message: MessageInput) =>
-      prisma.message.create({
-        data: {
-          imageUrls: getImageUrls(message),
-          sender: message.sender,
-          text: message.text?.trim() || null,
-          imageUrl: getImageUrls(message)[0] ?? null,
-          replyToMessageId: message.replyToMessageId ?? null
-        },
-        include: messageInclude
-      })
-    )
-  );
+  const messages =
+    messageInputs.length === 1 ? [await createMessage(messageInputs[0])] : await prisma.$transaction(messageInputs.map(createMessage));
 
-  await notifyMessagesChanged({ type: "created", id: messages[0]?.id });
+  void notifyMessagesChanged({ type: "created", id: messages[0]?.id });
 
   if ("messages" in parsed.data) {
     return NextResponse.json({ messages }, { status: 201 });

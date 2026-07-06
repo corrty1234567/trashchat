@@ -686,8 +686,12 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
   async function handleSubmit(payload: ComposerPayload) {
     handleTypingActivity(false);
-    setIsSending(true);
     setError(null);
+    const shouldLockComposer = Boolean(editing);
+
+    if (shouldLockComposer) {
+      setIsSending(true);
+    }
 
     try {
       if (editing) {
@@ -730,7 +734,6 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         setMessages((currentMessages) =>
           currentMessages.map((message) => (message.id === editingMessage.id ? data.message : message))
         );
-        void loadMessages().catch(() => undefined);
       } else {
         const imageFiles = payload.files;
         const now = new Date().toISOString();
@@ -798,7 +801,6 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
               data.message
             ])
           );
-          void loadMessages().catch(() => undefined);
         } catch (sendError) {
           setMessages((currentMessages) =>
             currentMessages.map((message) => (message.id === tempId ? { ...message, clientStatus: "failed" } : message))
@@ -809,7 +811,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "操作失敗");
     } finally {
-      setIsSending(false);
+      if (shouldLockComposer) {
+        setIsSending(false);
+      }
     }
   }
 

@@ -74,7 +74,10 @@ export function ChatComposer({
     };
   }, [files]);
 
-  const canSubmit = useMemo(() => Boolean(text.trim() || files.length > 0) && !isSending, [files.length, isSending, text]);
+  const canSubmit = useMemo(
+    () => Boolean(text.trim() || files.length > 0) && !(editing && isSending),
+    [editing, files.length, isSending, text]
+  );
 
   function addFiles(nextFiles: File[]) {
     if (editing || nextFiles.length === 0) {
@@ -248,7 +251,7 @@ export function ChatComposer({
             accept="image/*"
             multiple
             className="sr-only"
-            disabled={Boolean(editing) || isSending}
+            disabled={Boolean(editing)}
             onChange={(event) => {
               addFiles(Array.from(event.target.files ?? []));
               event.currentTarget.value = "";
@@ -257,7 +260,7 @@ export function ChatComposer({
 
           <button
             type="button"
-            disabled={Boolean(editing) || isSending}
+            disabled={Boolean(editing)}
             onClick={() => fileInputRef.current?.click()}
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="上傳圖片"
@@ -303,7 +306,7 @@ export function ChatComposer({
             className="inline-flex h-11 min-w-11 shrink-0 items-center justify-center rounded-md bg-brand px-4 font-semibold text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300"
             aria-label={editing ? "儲存編輯" : "送出訊息"}
           >
-            {isSending ? "..." : <Send size={18} />}
+            {editing && isSending ? "..." : <Send size={18} />}
           </button>
         </form>
       </div>

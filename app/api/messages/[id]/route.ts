@@ -80,7 +80,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     include: messageInclude
   });
 
-  await notifyMessagesChanged({ type: "edited", id: message.id });
+  void notifyMessagesChanged({ type: "edited", id: message.id });
 
   return NextResponse.json({ message });
 }
@@ -125,7 +125,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     include: messageInclude
   });
 
-  await notifyMessagesChanged({ type: "recalled", id: message.id });
+  void notifyMessagesChanged({ type: "recalled", id: message.id });
 
   return NextResponse.json({ message });
 }
