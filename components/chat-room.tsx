@@ -6,17 +6,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { MemberAdminPanel } from "@/components/member-admin-panel";
 import { MessageBubble } from "@/components/message-bubble";
 import { VoiceCall } from "@/components/voice-call";
 import { mentionsSender } from "@/lib/mentions";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { getMessageMinuteKey } from "@/lib/time";
-import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
+import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
 type ChatRoomProps = {
   sender: Sender;
+  members: Member[];
+  onMembersChange: (members: Member[]) => void;
   onSwitchIdentity: () => void;
 };
+
+const ADMIN_SENDER_ID = "CHEN";
+const ADMIN_TITLE_TRIGGER = "chashtrat";
 
 const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1500;
 const MESSAGE_REALTIME_HEALTH_CHECK_MS = 15000;
@@ -49,12 +55,12 @@ function getUnreadIncomingMessages(messages: Message[], sender: Sender) {
   );
 }
 
-function getReadByLabels(message: Message, currentSender: Sender) {
+function getReadByLabels(message: Message, currentSender: Sender, members: readonly Member[]) {
   const readSenders = new Set(
     (message.reads ?? []).map((read) => read.sender).filter((readSender) => readSender !== currentSender)
   );
 
-  return [...readSenders].map((readSender) => SENDER_LABEL[readSender]);
+  return [...readSenders].map((readSender) => getSenderLabel(readSender, members));
 }
 
 function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[]) {
@@ -166,11 +172,13 @@ async function readApiError(response: Response, fallback: string) {
   return typeof data?.error === "string" ? data.error : fallback;
 }
 
-export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
+export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }: ChatRoomProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [secretTitle, setSecretTitle] = useState("trashchat");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
@@ -402,13 +410,13 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     for (let index = unreadIncomingMessages.length - 1; index >= 0; index -= 1) {
       const message = unreadIncomingMessages[index];
 
-      if (mentionsSender(message.text, sender)) {
+      if (mentionsSender(message.text, sender, members)) {
         return message.sender;
       }
     }
 
     return null;
-  }, [sender, unreadIncomingMessages]);
+  }, [members, sender, unreadIncomingMessages]);
 
   useEffect(() => {
     if (!isPageActive || unreadIncomingMessages.length === 0) {
@@ -694,9 +702,18 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
     setEditing(message);
   }
 
+  function handleSecretTitleChange(value: string) {
+    setSecretTitle(value);
+
+    if (sender === ADMIN_SENDER_ID && value.trim().toLowerCase() === ADMIN_TITLE_TRIGGER) {
+      setIsAdminOpen(true);
+      setSecretTitle("trashchat");
+    }
+  }
+
   return (
     <main className="flex h-dvh flex-col bg-paper text-ink">
-      <BrowserChatStatus unreadCount={unreadIncomingMessages.length} mentionSender={unreadMentionSender} />
+      <BrowserChatStatus unreadCount={unreadIncomingMessages.length} mentionSender={unreadMentionSender} members={members} />
 
       <header className="border-b border-line bg-white/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
@@ -710,12 +727,24 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
           </button>
 
           <div className="min-w-0 text-center">
-            <h1 className="truncate text-lg font-semibold">trashchat</h1>
-            <p className="truncate text-xs text-slate-500">你是 {SENDER_LABEL[sender]}</p>
+            {sender === ADMIN_SENDER_ID ? (
+              <input
+                value={secretTitle}
+                onChange={(event) => handleSecretTitleChange(event.target.value)}
+                onBlur={() => setSecretTitle("trashchat")}
+                maxLength={18}
+                spellCheck={false}
+                aria-label="trashchat"
+                className="w-[9.5ch] rounded-md border border-transparent bg-transparent px-1 text-center text-lg font-semibold outline-none transition focus:border-line focus:bg-white focus:ring-4 focus:ring-brand/10"
+              />
+            ) : (
+              <h1 className="truncate text-lg font-semibold">trashchat</h1>
+            )}
+            <p className="truncate text-xs text-slate-500">你是 {getSenderLabel(sender, members)}</p>
           </div>
 
           <div className="flex items-center gap-2">
-            <VoiceCall sender={sender} />
+            <VoiceCall sender={sender} members={members} />
             <button
               type="button"
               onClick={() => void loadMessages()}
@@ -748,11 +777,12 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
                 key={message.id}
                 message={message}
                 currentSender={sender}
+                members={members}
                 isHighlighted={highlightedId === message.id}
                 showTimestamp={showTimestamp}
                 readByLabels={
                   message.sender === sender && !message.clientStatus && !message.recalledAt
-                    ? getReadByLabels(message, sender)
+                    ? getReadByLabels(message, sender, members)
                     : null
                 }
                 onReply={() => {
@@ -769,7 +799,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         )}
         {typingSender ? (
           <div className="flex justify-start px-1 text-sm text-slate-500">
-            {SENDER_LABEL[typingSender]} 正在輸入...
+            {getSenderLabel(typingSender, members)} 正在輸入...
           </div>
         ) : null}
         <div ref={bottomRef} />
@@ -781,6 +811,7 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
 
       <ChatComposer
         currentSender={sender}
+        members={members}
         isSending={isSending}
         replyTo={replyTo}
         editing={editing}
@@ -790,6 +821,10 @@ export function ChatRoom({ sender, onSwitchIdentity }: ChatRoomProps) {
         onTypingActivity={handleTypingActivity}
         onSubmit={handleSubmit}
       />
+
+      {isAdminOpen ? (
+        <MemberAdminPanel members={members} onMembersChange={onMembersChange} onClose={() => setIsAdminOpen(false)} />
+      ) : null}
 
       <ImageLightbox
         imageUrls={lightboxImages?.urls ?? []}

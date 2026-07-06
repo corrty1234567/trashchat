@@ -6,13 +6,14 @@ import Pusher from "pusher-js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CallSignal, CallSignalType } from "@/lib/call";
 import { PUSHER_CHANNEL, PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
-import { SENDER_LABEL, SENDER_VALUES, type Sender } from "@/lib/types";
+import { getSenderLabel, type Member, type Sender } from "@/lib/types";
 
 type CallStatus = "idle" | "calling" | "ringing" | "connecting" | "active";
 type RingMode = "outgoing" | "incoming";
 
 type VoiceCallProps = {
   sender: Sender;
+  members: readonly Member[];
 };
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -38,7 +39,7 @@ async function readApiError(response: Response, fallback: string) {
   return typeof data?.error === "string" ? data.error : fallback;
 }
 
-export function VoiceCall({ sender }: VoiceCallProps) {
+export function VoiceCall({ sender, members }: VoiceCallProps) {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [activePeer, setActivePeer] = useState<Sender | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +62,7 @@ export function VoiceCall({ sender }: VoiceCallProps) {
 
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
-  const peerOptions = useMemo(() => SENDER_VALUES.filter((option) => option !== sender), [sender]);
+  const peerOptions = useMemo(() => members.filter((member) => member.id !== sender), [members, sender]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -360,10 +361,10 @@ export function VoiceCall({ sender }: VoiceCallProps) {
         void sendSignal("hangup", nextCallId, peer).catch(() => undefined);
         cleanupCall();
         setIsPanelOpen(true);
-        setError(`${SENDER_LABEL[peer]} 沒有回應。`);
+        setError(`${getSenderLabel(peer, members)} 沒有回應。`);
       }, OUTGOING_CALL_TIMEOUT_MS);
     },
-    [cleanupCall, clearOutgoingTimeout, sendSignal]
+    [cleanupCall, clearOutgoingTimeout, members, sendSignal]
   );
 
   const startCall = useCallback(
@@ -506,14 +507,14 @@ export function VoiceCall({ sender }: VoiceCallProps) {
       if (signal.type === "call-reject") {
         cleanupCall();
         setIsPanelOpen(true);
-        setError(`${SENDER_LABEL[peer]} 沒有接聽。`);
+        setError(`${getSenderLabel(peer, members)} 沒有接聽。`);
         return;
       }
 
       if (signal.type === "hangup") {
         cleanupCall();
         setIsPanelOpen(true);
-        setError(`${SENDER_LABEL[peer]} 已掛斷。`);
+        setError(`${getSenderLabel(peer, members)} 已掛斷。`);
         return;
       }
 
@@ -584,6 +585,7 @@ export function VoiceCall({ sender }: VoiceCallProps) {
       cleanupCall,
       clearOutgoingTimeout,
       createPeerConnection,
+      members,
       sendSignal,
       sender
     ]
@@ -723,7 +725,7 @@ export function VoiceCall({ sender }: VoiceCallProps) {
   }, [cleanupCall]);
 
   const showCallPanel = isPanelOpen || status !== "idle" || Boolean(error);
-  const activePeerLabel = activePeer ? SENDER_LABEL[activePeer] : null;
+  const activePeerLabel = activePeer ? getSenderLabel(activePeer, members) : null;
   const statusText =
     status === "calling"
       ? `正在撥打 ${activePeerLabel}`
@@ -812,13 +814,13 @@ export function VoiceCall({ sender }: VoiceCallProps) {
               <div className="grid grid-cols-2 gap-2">
                 {peerOptions.map((peer) => (
                   <button
-                    key={peer}
+                    key={peer.id}
                     type="button"
-                    onClick={() => void startCall(peer)}
+                    onClick={() => void startCall(peer.id)}
                     className="group flex min-h-20 flex-col items-start justify-between rounded-md border border-line bg-white p-3 text-left transition hover:border-brand/40 hover:bg-brand/5 focus:outline-none focus:ring-4 focus:ring-brand/15"
                   >
                     <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-sm font-semibold text-slate-700 transition group-hover:bg-brand group-hover:text-white">
-                      {SENDER_LABEL[peer]}
+                      {peer.name}
                     </span>
                     <span className="text-xs font-medium text-slate-500">撥打</span>
                   </button>

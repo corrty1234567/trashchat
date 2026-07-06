@@ -3,13 +3,15 @@
 import clsx from "clsx";
 import { URL_PATTERN, normalizeUrlMatch } from "@/lib/links";
 import { splitMentionText } from "@/lib/mentions";
+import type { Member } from "@/lib/types";
 
 type LinkifiedTextProps = {
   text: string;
   isOwn: boolean;
+  members: readonly Member[];
 };
 
-export function LinkifiedText({ text, isOwn }: LinkifiedTextProps) {
+export function LinkifiedText({ text, isOwn, members }: LinkifiedTextProps) {
   const parts: Array<{ type: "text" | "link"; value: string }> = [];
   let lastIndex = 0;
 
@@ -35,7 +37,7 @@ export function LinkifiedText({ text, isOwn }: LinkifiedTextProps) {
   }
 
   function renderTextPart(value: string, partIndex: number) {
-    return splitMentionText(value).map((part, mentionIndex) =>
+    return splitMentionText(value, members).map((part, mentionIndex) =>
       part.type === "mention" ? (
         <span
           key={`${part.value}-${partIndex}-${mentionIndex}`}

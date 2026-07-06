@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { SENDER_LABEL, type Sender } from "@/lib/types";
+import { getSenderLabel, type Member, type Sender } from "@/lib/types";
 
 type BrowserChatStatusProps = {
   unreadCount: number;
   mentionSender: Sender | null;
+  members: readonly Member[];
 };
 
 function createTrashIcon(hasNotification: boolean) {
@@ -81,7 +82,7 @@ async function playNotificationSound(audioContextRef: { current: AudioContext | 
   });
 }
 
-export function BrowserChatStatus({ unreadCount, mentionSender }: BrowserChatStatusProps) {
+export function BrowserChatStatus({ unreadCount, mentionSender, members }: BrowserChatStatusProps) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const hasMountedRef = useRef(false);
   const lastUnreadCountRef = useRef(unreadCount);
@@ -89,14 +90,14 @@ export function BrowserChatStatus({ unreadCount, mentionSender }: BrowserChatSta
   useEffect(() => {
     const hasNotification = unreadCount > 0 || Boolean(mentionSender);
     const title = mentionSender
-      ? `${SENDER_LABEL[mentionSender]}提及了你`
+      ? `${getSenderLabel(mentionSender, members)}提及了你`
       : unreadCount > 0
         ? `trashchat (${unreadCount})`
         : "trashchat";
 
     document.title = title;
     getIconLink().href = createTrashIcon(hasNotification);
-  }, [mentionSender, unreadCount]);
+  }, [members, mentionSender, unreadCount]);
 
   useEffect(() => {
     function unlockAudio() {

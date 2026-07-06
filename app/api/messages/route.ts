@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { getMembers } from "@/lib/members";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
-import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const messageInputSchema = z
   .object({
-    sender: z.enum(SENDER_VALUES),
+    sender: z.string().trim().min(1).max(120),
     text: z.string().trim().max(4000).optional(),
     imageUrl: z.string().url().optional(),
     imageUrls: z.array(z.string().url()).max(10).optional(),
@@ -81,6 +81,13 @@ export async function POST(request: Request) {
   }
 
   const messageInputs = getMessageInputs(parsed.data);
+  const memberIds = new Set((await getMembers()).map((member) => member.id));
+  const invalidSender = messageInputs.find((message) => !memberIds.has(message.sender));
+
+  if (invalidSender) {
+    return NextResponse.json({ error: "Sender does not exist." }, { status: 400 });
+  }
+
   const replyTargetIds = [
     ...new Set(
       messageInputs

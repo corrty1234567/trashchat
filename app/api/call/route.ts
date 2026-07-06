@@ -2,22 +2,23 @@ import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { getMembers } from "@/lib/members";
 import { PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
 import { triggerRealtimeEvent } from "@/lib/pusher-server";
-import { SENDER_VALUES, type Sender } from "@/lib/types";
+import type { Sender } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const callSignalSchema = z.object({
   type: z.enum(["call-request", "call-accept", "call-reject", "offer", "answer", "ice-candidate", "hangup"]),
   callId: z.string().min(8).max(120),
-  from: z.enum(SENDER_VALUES),
-  to: z.enum(SENDER_VALUES),
+  from: z.string().trim().min(1).max(120),
+  to: z.string().trim().min(1).max(120),
   payload: z.unknown().optional()
 });
 
 const getCallSignalsSchema = z.object({
-  to: z.enum(SENDER_VALUES),
+  to: z.string().trim().min(1).max(120),
   since: z.string().datetime().optional()
 });
 
@@ -60,6 +61,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const memberIds = new Set((await getMembers()).map((member) => member.id));
+
+  if (!memberIds.has(parsed.data.to)) {
+    return NextResponse.json({ error: "Recipient does not exist." }, { status: 400 });
+  }
+
   const since = parsed.data.since ? new Date(parsed.data.since) : new Date(Date.now() - 10_000);
   const signals = await prisma.callSignal.findMany({
     where: {
@@ -88,6 +95,12 @@ export async function POST(request: Request) {
 
   if (parsed.data.from === parsed.data.to) {
     return NextResponse.json({ error: "Caller and recipient must be different." }, { status: 400 });
+  }
+
+  const memberIds = new Set((await getMembers()).map((member) => member.id));
+
+  if (!memberIds.has(parsed.data.from) || !memberIds.has(parsed.data.to)) {
+    return NextResponse.json({ error: "Call member does not exist." }, { status: 400 });
   }
 
   const payload = toJsonPayload(parsed.data.payload);

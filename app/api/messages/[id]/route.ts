@@ -3,17 +3,16 @@ import { z } from "zod";
 import { canEditMessage } from "@/lib/time";
 import { prisma } from "@/lib/prisma";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
-import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const updateMessageSchema = z.object({
-  sender: z.enum(SENDER_VALUES),
+  sender: z.string().trim().min(1).max(120),
   text: z.string().trim().min(1).max(4000)
 });
 
 const recallMessageSchema = z.object({
-  sender: z.enum(SENDER_VALUES)
+  sender: z.string().trim().min(1).max(120)
 });
 
 const messageInclude = {

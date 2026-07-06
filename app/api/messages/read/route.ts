@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { memberExists } from "@/lib/members";
 import { prisma } from "@/lib/prisma";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
-import { SENDER_VALUES } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const markReadSchema = z.object({
-  sender: z.enum(SENDER_VALUES),
+  sender: z.string().trim().min(1).max(120),
   messageIds: z.array(z.string().cuid()).max(500).optional()
 });
 
@@ -16,6 +16,10 @@ export async function POST(request: Request) {
 
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  if (!(await memberExists(parsed.data.sender))) {
+    return NextResponse.json({ error: "Sender does not exist." }, { status: 400 });
   }
 
   const messages = await prisma.message.findMany({

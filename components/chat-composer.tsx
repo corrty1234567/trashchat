@@ -6,7 +6,7 @@ import { AtSign, ImagePlus, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getMentionToken } from "@/lib/mentions";
 import { getReplyPreview } from "@/lib/messages";
-import { SENDER_LABEL, SENDER_VALUES, type Message, type Sender } from "@/lib/types";
+import { type Member, type Message, type Sender } from "@/lib/types";
 
 export type ComposerPayload = {
   text: string;
@@ -15,6 +15,7 @@ export type ComposerPayload = {
 
 type ChatComposerProps = {
   currentSender: Sender;
+  members: readonly Member[];
   isSending: boolean;
   replyTo: Message | null;
   editing: Message | null;
@@ -29,6 +30,7 @@ const MAX_SELECTED_IMAGES = 10;
 
 export function ChatComposer({
   currentSender,
+  members,
   isSending,
   replyTo,
   editing,
@@ -43,7 +45,10 @@ export function ChatComposer({
   const [previewItems, setPreviewItems] = useState<Array<{ file: File; url: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const mentionTargets = useMemo(() => SENDER_VALUES.filter((sender) => sender !== currentSender), [currentSender]);
+  const mentionTargets = useMemo(
+    () => members.filter((member) => member.id !== currentSender),
+    [currentSender, members]
+  );
 
   useEffect(() => {
     if (editing) {
@@ -111,7 +116,7 @@ export function ChatComposer({
       return;
     }
 
-    const token = getMentionToken(sender);
+    const token = getMentionToken(sender, members);
     const textarea = textareaRef.current;
     const selectionStart = textarea?.selectionStart ?? text.length;
     const selectionEnd = textarea?.selectionEnd ?? text.length;
@@ -224,12 +229,12 @@ export function ChatComposer({
             <div className="flex min-w-0 gap-1.5 overflow-x-auto">
               {mentionTargets.map((target) => (
                 <button
-                  key={target}
+                  key={target.id}
                   type="button"
-                  onClick={() => insertMention(target)}
+                  onClick={() => insertMention(target.id)}
                   className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-line bg-white px-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand/40 hover:bg-brand/5 hover:text-brand focus:outline-none focus:ring-4 focus:ring-brand/15"
                 >
-                  @{SENDER_LABEL[target]}
+                  @{target.name}
                 </button>
               ))}
             </div>

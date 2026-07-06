@@ -10,13 +10,14 @@ import { LinkPreviewCard } from "@/components/link-preview-card";
 import { getFirstUrl } from "@/lib/links";
 import { getMessageImageUrls, getReplyPreview } from "@/lib/messages";
 import { canEditMessage, formatMessageTime } from "@/lib/time";
-import { SENDER_LABEL, type Message, type Sender } from "@/lib/types";
+import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
 type MessageBubbleProps = {
   message: Message;
   currentSender: Sender;
   isHighlighted: boolean;
   showTimestamp: boolean;
+  members: readonly Member[];
   readByLabels: string[] | null;
   onReply: () => void;
   onEdit: () => void;
@@ -96,6 +97,7 @@ export function MessageBubble({
   currentSender,
   isHighlighted,
   showTimestamp,
+  members,
   readByLabels,
   onReply,
   onEdit,
@@ -159,7 +161,7 @@ export function MessageBubble({
         <div className={clsx("flex min-w-0 flex-col gap-1", isOwn ? "items-end" : "items-start")}>
           {showMeta ? (
             <div className={clsx("flex items-center gap-2 text-xs text-slate-500", isOwn && "flex-row-reverse")}>
-              {showTimestamp ? <span>{isOwn ? "你" : SENDER_LABEL[message.sender]}</span> : null}
+              {showTimestamp ? <span>{isOwn ? "你" : getSenderLabel(message.sender, members)}</span> : null}
               {showTimestamp ? <span>{formatMessageTime(message.createdAt)}</span> : null}
               {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
               {message.clientStatus === "sending" ? <span>傳送中</span> : null}
@@ -205,11 +207,11 @@ export function MessageBubble({
             <MessageImageStack
               imageUrls={imageUrls}
               isOwn={isOwn}
-              senderLabel={isOwn ? "你" : SENDER_LABEL[message.sender]}
+              senderLabel={isOwn ? "你" : getSenderLabel(message.sender, members)}
               onOpenImages={onOpenImages}
             />
 
-            {message.text && !isRecalled ? <LinkifiedText text={message.text} isOwn={isOwn} /> : null}
+            {message.text && !isRecalled ? <LinkifiedText text={message.text} isOwn={isOwn} members={members} /> : null}
 
             {previewUrl ? <LinkPreviewCard url={previewUrl} /> : null}
 

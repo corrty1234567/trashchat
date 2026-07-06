@@ -1,6 +1,20 @@
 export const SENDER_VALUES = ["CHEN", "ZUO", "SEVENTEEN"] as const;
 
-export type Sender = (typeof SENDER_VALUES)[number];
+export const DEFAULT_MEMBERS = [
+  { id: "CHEN", name: "10", isProtected: true },
+  { id: "ZUO", name: "27", isProtected: true },
+  { id: "SEVENTEEN", name: "17", isProtected: true }
+] as const;
+
+export type Sender = string;
+
+export type Member = {
+  id: Sender;
+  name: string;
+  isProtected: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 export type Message = {
   id: string;
@@ -37,12 +51,22 @@ export type ReplyMessage = {
   recalledAt: string | null;
 };
 
-export const SENDER_LABEL: Record<Sender, string> = {
-  CHEN: "10",
-  ZUO: "27",
-  SEVENTEEN: "17"
-};
+export const SENDER_LABEL: Record<string, string> = DEFAULT_MEMBERS.reduce(
+  (labels, member) => ({
+    ...labels,
+    [member.id]: member.name
+  }),
+  {} as Record<string, string>
+);
+
+export function getSenderLabel(sender: Sender, members: readonly Member[] = DEFAULT_MEMBERS): string {
+  return members.find((member) => member.id === sender)?.name ?? SENDER_LABEL[sender] ?? sender;
+}
+
+export function isProtectedSender(sender: Sender) {
+  return DEFAULT_MEMBERS.some((member) => member.id === sender);
+}
 
 export function isSender(value: unknown): value is Sender {
-  return SENDER_VALUES.includes(value as Sender);
+  return typeof value === "string" && value.trim().length > 0;
 }
