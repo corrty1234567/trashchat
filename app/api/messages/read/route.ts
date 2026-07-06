@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         readAt
       }
     });
-    await notifyMessagesChanged({ type: "read" });
+    await notifyMessagesChanged({ type: "read", sender: parsed.data.sender });
   }
 
   return NextResponse.json({

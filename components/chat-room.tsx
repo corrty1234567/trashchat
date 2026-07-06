@@ -28,9 +28,9 @@ const ADMIN_TITLE_TRIGGER = "chashtrat";
 const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1500;
 const MESSAGE_REALTIME_HEALTH_CHECK_MS = 15000;
 const MESSAGE_BACKGROUND_POLLING_INTERVAL_MS = 30000;
-const INITIAL_MESSAGE_LIMIT = 80;
-const OLDER_MESSAGE_LIMIT = 80;
-const OLDER_MESSAGE_LOAD_DELAY_MS = 180;
+const INITIAL_MESSAGE_LIMIT = 40;
+const OLDER_MESSAGE_LIMIT = 60;
+const MESSAGE_LOAD_TOP_OFFSET_PX = 220;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
@@ -104,10 +104,6 @@ function getMessagePageUrl(limit: number, beforeMessage?: Message) {
   }
 
   return `/api/messages?${searchParams.toString()}`;
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function getOptimisticId() {
@@ -213,6 +209,7 @@ async function readApiError(response: Response, fallback: string) {
 export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }: ChatRoomProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
@@ -223,6 +220,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [typingSender, setTypingSender] = useState<Sender | null>(null);
   const [isPageActive, setIsPageActive] = useState(true);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const loadMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
   const loadOlderMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
@@ -297,6 +295,8 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       }
 
       const request = (async () => {
+        setIsLoadingOlder(true);
+
         const response = await fetch(getMessagePageUrl(OLDER_MESSAGE_LIMIT, oldestMessage), {
           cache: "no-store"
         });
@@ -316,6 +316,8 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       try {
         return await request;
       } finally {
+        setIsLoadingOlder(false);
+
         if (loadOlderMessagesPromiseRef.current === request) {
           loadOlderMessagesPromiseRef.current = null;
         }
@@ -329,19 +331,10 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
     async function init() {
       try {
-        const firstPage = await loadMessages();
+        await loadMessages();
 
         if (isMounted) {
           setIsLoading(false);
-        }
-
-        let nextPage = firstPage;
-        let beforeMessage = firstPage.messages[0];
-
-        while (isMounted && nextPage.hasMore && beforeMessage) {
-          await delay(OLDER_MESSAGE_LOAD_DELAY_MS);
-          nextPage = await loadOlderMessages(beforeMessage);
-          beforeMessage = nextPage.messages[0] ?? beforeMessage;
         }
       } catch (loadError) {
         if (isMounted) {
@@ -359,7 +352,41 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     return () => {
       isMounted = false;
     };
-  }, [loadMessages, loadOlderMessages, sender]);
+  }, [loadMessages, sender]);
+
+  const handleMessageScroll = useCallback(() => {
+    const container = scrollContainerRef.current;
+
+    if (
+      !container ||
+      container.scrollTop > MESSAGE_LOAD_TOP_OFFSET_PX ||
+      !hasMoreOlderMessagesRef.current ||
+      loadOlderMessagesPromiseRef.current
+    ) {
+      return;
+    }
+
+    const previousScrollHeight = container.scrollHeight;
+    const previousScrollTop = container.scrollTop;
+
+    void loadOlderMessages()
+      .then((page) => {
+        if (page.messages.length === 0) {
+          return;
+        }
+
+        window.requestAnimationFrame(() => {
+          const nextContainer = scrollContainerRef.current;
+
+          if (!nextContainer) {
+            return;
+          }
+
+          nextContainer.scrollTop = nextContainer.scrollHeight - previousScrollHeight + previousScrollTop;
+        });
+      })
+      .catch(() => undefined);
+  }, [loadOlderMessages]);
 
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
@@ -425,7 +452,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
     pusher.connection.bind("state_change", handleStateChange);
 
-    channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, () => {
+    channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, (event: { type?: string; sender?: Sender } | undefined) => {
+      if (event?.type === "read" && event.sender === sender) {
+        return;
+      }
+
       void loadMessages().catch(() => undefined);
     });
     channel.bind(PUSHER_EVENT_TYPING_CHANGED, (event: { sender: Sender; isTyping: boolean }) => {
@@ -575,15 +606,10 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       },
       body: JSON.stringify({ sender, messageIds: unreadMessageIds })
     })
-      .then((response) => {
-        if (response.ok) {
-          void loadMessages().catch(() => undefined);
-        }
-      })
       .finally(() => {
         readSyncRef.current = false;
       });
-  }, [isPageActive, loadMessages, sender, unreadIncomingMessages]);
+  }, [isPageActive, sender, unreadIncomingMessages]);
 
   function focusMessage(messageId: string) {
     document.getElementById(`message-${messageId}`)?.scrollIntoView({
@@ -861,12 +887,10 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
           <div className="min-w-0 text-center">
             {sender === ADMIN_SENDER_ID ? (
-              <div className="flex justify-center text-lg font-semibold" aria-label="拖曳 trashchat 字母">
+              <div className="inline-flex justify-center text-lg font-semibold leading-7" aria-label="拖曳 trashchat 字母">
                 {titleLetters.map((letter, index) => (
                   <span
                     key={letter.id}
-                    role="button"
-                    tabIndex={0}
                     draggable
                     onDragStart={() => {
                       draggedTitleIndexRef.current = index;
@@ -884,7 +908,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
                     onDragEnd={() => {
                       draggedTitleIndexRef.current = null;
                     }}
-                    className="inline-flex h-7 min-w-[0.62rem] cursor-grab select-none items-center justify-center rounded px-0.5 text-slate-950 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-brand/20 active:cursor-grabbing"
+                    className="inline-block cursor-grab select-none text-slate-950 active:cursor-grabbing"
                   >
                     {letter.value}
                   </span>
@@ -910,7 +934,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         </div>
       </header>
 
-      <section className="chat-scrollbar mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4 overflow-y-auto px-3 py-5 sm:px-5">
+      <section
+        ref={scrollContainerRef}
+        onScroll={handleMessageScroll}
+        className="chat-scrollbar mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4 overflow-y-auto px-3 py-5 sm:px-5"
+      >
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center">
             <div className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-brand" />
@@ -920,35 +948,42 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
             還沒有訊息。傳送第一則文字或圖片開始對話。
           </div>
         ) : (
-          messages.map((message, index) => {
-            const previousMessage = messages[index - 1];
-            const showTimestamp =
-              !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
+          <>
+            {isLoadingOlder ? (
+              <div className="flex justify-center py-1">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-line border-t-brand" />
+              </div>
+            ) : null}
+            {messages.map((message, index) => {
+              const previousMessage = messages[index - 1];
+              const showTimestamp =
+                !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
 
-            return (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                currentSender={sender}
-                members={members}
-                isHighlighted={highlightedId === message.id}
-                showTimestamp={showTimestamp}
-                readByLabels={
-                  message.sender === sender && !message.clientStatus && !message.recalledAt
-                    ? getReadByLabels(message, sender, members)
-                    : null
-                }
-                onReply={() => {
-                  setEditing(null);
-                  setReplyTo(message);
-                }}
-                onEdit={() => handleStartEdit(message)}
-                onRecall={() => void handleRecall(message)}
-                onOpenImages={(urls, index = 0) => setLightboxImages({ urls, index })}
-                onQuoteClick={focusMessage}
-              />
-            );
-          })
+              return (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  currentSender={sender}
+                  members={members}
+                  isHighlighted={highlightedId === message.id}
+                  showTimestamp={showTimestamp}
+                  readByLabels={
+                    message.sender === sender && !message.clientStatus && !message.recalledAt
+                      ? getReadByLabels(message, sender, members)
+                      : null
+                  }
+                  onReply={() => {
+                    setEditing(null);
+                    setReplyTo(message);
+                  }}
+                  onEdit={() => handleStartEdit(message)}
+                  onRecall={() => void handleRecall(message)}
+                  onOpenImages={(urls, index = 0) => setLightboxImages({ urls, index })}
+                  onQuoteClick={focusMessage}
+                />
+              );
+            })}
+          </>
         )}
         {typingSender ? (
           <div className="flex justify-start px-1 text-sm text-slate-500">
