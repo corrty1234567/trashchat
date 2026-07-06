@@ -21,8 +21,11 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:global.stun.twilio.com:3478" }
 ];
 const SIGNAL_FAST_POLLING_INTERVAL_MS = 500;
-const SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS = 1500;
-const SIGNAL_BACKGROUND_POLLING_INTERVAL_MS = 6000;
+const SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS = 60000;
+const SIGNAL_IDLE_FALLBACK_POLLING_INTERVAL_MS = 6000;
+const SIGNAL_CONFIGURED_FALLBACK_POLLING_INTERVAL_MS = 10000;
+const SIGNAL_INITIAL_CONFIGURED_POLLING_DELAY_MS = 4000;
+const SIGNAL_BACKGROUND_POLLING_INTERVAL_MS = 30000;
 const SIGNAL_POLLING_LOOKBACK_MS = 1500;
 const OUTGOING_CALL_TIMEOUT_MS = 45000;
 
@@ -648,7 +651,13 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
         return SIGNAL_FAST_POLLING_INTERVAL_MS;
       }
 
-      return pusherConnectedRef.current ? SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS : SIGNAL_FAST_POLLING_INTERVAL_MS;
+      if (pusherConnectedRef.current) {
+        return SIGNAL_IDLE_REALTIME_POLLING_INTERVAL_MS;
+      }
+
+      return pusherKey && pusherCluster
+        ? SIGNAL_CONFIGURED_FALLBACK_POLLING_INTERVAL_MS
+        : SIGNAL_IDLE_FALLBACK_POLLING_INTERVAL_MS;
     }
 
     function schedulePoll(delay = getPollingDelay()) {
@@ -702,11 +711,16 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
     }
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    void pollSignals().finally(() => {
-      if (!isStopped) {
-        schedulePoll();
-      }
-    });
+
+    if (pusherKey && pusherCluster) {
+      schedulePoll(SIGNAL_INITIAL_CONFIGURED_POLLING_DELAY_MS);
+    } else {
+      void pollSignals().finally(() => {
+        if (!isStopped) {
+          schedulePoll();
+        }
+      });
+    }
 
     return () => {
       isStopped = true;
@@ -716,7 +730,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [receiveSignal, sender]);
+  }, [pusherCluster, pusherKey, receiveSignal, sender]);
 
   useEffect(() => {
     return () => {

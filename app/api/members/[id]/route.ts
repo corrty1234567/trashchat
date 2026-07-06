@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { ensureDefaultMembers, serializeMember, validateMemberName } from "@/lib/members";
+import { ensureDefaultMembers, invalidateMembersCache, serializeMember, validateMemberName } from "@/lib/members";
 
 export const runtime = "nodejs";
 
@@ -39,6 +39,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         name: validated.name
       }
     });
+    invalidateMembersCache();
 
     return NextResponse.json({ member: serializeMember(member) });
   } catch (error) {
@@ -74,6 +75,7 @@ export async function DELETE(_request: Request, context: RouteContext) {
   await prisma.member.delete({
     where: { id }
   });
+  invalidateMembersCache();
 
   return NextResponse.json({ ok: true });
 }

@@ -25,6 +25,7 @@ model Message {
   reads   MessageRead[]
 
   @@index([createdAt])
+  @@index([createdAt, id])
   @@index([replyToMessageId])
   @@map("messages")
 }

@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type LinkPreview = {
   url: string;
@@ -54,11 +54,47 @@ function getCachedPreview(url: string) {
 export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   const [preview, setPreview] = useState<LinkPreview | null>(null);
   const [isUnavailable, setIsUnavailable] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!url) {
+      setIsVisible(false);
+      return;
+    }
+
+    const element = containerRef.current;
+
+    if (!element || !("IntersectionObserver" in window)) {
+      setIsVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      {
+        rootMargin: "260px 0px"
+      }
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [url]);
 
   useEffect(() => {
     if (!url) {
       setPreview(null);
       setIsUnavailable(false);
+      return;
+    }
+
+    if (!isVisible) {
       return;
     }
 
@@ -89,27 +125,36 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
     return () => {
       isMounted = false;
     };
-  }, [url]);
+  }, [isVisible, url]);
 
   if (!url || isUnavailable || !preview) {
-    return null;
+    return url ? <div ref={containerRef} className="h-px w-px" /> : null;
   }
 
   return (
-    <a
-      href={preview.url}
-      target="_blank"
-      rel="noreferrer"
-      className="mt-2 block w-[min(70vw,420px)] overflow-hidden rounded-lg bg-white text-ink shadow-sm transition hover:brightness-95"
-    >
-      {preview.image ? (
-        <img src={preview.image} alt="" className="h-40 w-full bg-black object-cover" referrerPolicy="no-referrer" />
-      ) : null}
-      <div className="space-y-1 p-3">
-        {preview.title ? <p className="line-clamp-2 text-sm font-semibold leading-5">{preview.title}</p> : null}
-        {preview.description ? <p className="line-clamp-2 text-xs leading-5 text-slate-600">{preview.description}</p> : null}
-        {preview.siteName ? <p className="truncate text-xs uppercase tracking-wide text-slate-500">{preview.siteName}</p> : null}
-      </div>
-    </a>
+    <div ref={containerRef}>
+      <a
+        href={preview.url}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 block w-[min(70vw,420px)] overflow-hidden rounded-lg bg-white text-ink shadow-sm transition hover:brightness-95"
+      >
+        {preview.image ? (
+          <img
+            src={preview.image}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-40 w-full bg-black object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ) : null}
+        <div className="space-y-1 p-3">
+          {preview.title ? <p className="line-clamp-2 text-sm font-semibold leading-5">{preview.title}</p> : null}
+          {preview.description ? <p className="line-clamp-2 text-xs leading-5 text-slate-600">{preview.description}</p> : null}
+          {preview.siteName ? <p className="truncate text-xs uppercase tracking-wide text-slate-500">{preview.siteName}</p> : null}
+        </div>
+      </a>
+    </div>
   );
 }

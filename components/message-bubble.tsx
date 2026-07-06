@@ -49,6 +49,8 @@ function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: Mess
         <img
           src={imageUrls[0]}
           alt="聊天圖片"
+          loading="lazy"
+          decoding="async"
           className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
         />
       </button>
@@ -82,7 +84,13 @@ function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: Mess
           />
         ))}
         <span className="absolute inset-0 overflow-hidden rounded-lg border border-white/80 bg-green-500 p-2 shadow-sm">
-          <img src={previewUrl} alt="相片堆疊預覽" className="h-full w-full rounded-md object-contain" />
+          <img
+            src={previewUrl}
+            alt="相片堆疊預覽"
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full rounded-md object-contain"
+          />
         </span>
         <span className="absolute bottom-2 right-2 rounded-md bg-black/65 px-2 py-1 text-xs font-semibold text-white">
           +{imageUrls.length - 1}
@@ -193,6 +201,8 @@ export function MessageBubble({
                   <img
                     src={getMessageImageUrls(message.replyTo)[0]}
                     alt="回覆圖片縮圖"
+                    loading="lazy"
+                    decoding="async"
                     className="h-9 w-9 shrink-0 rounded-md object-contain"
                   />
                 ) : null}

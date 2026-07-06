@@ -4,6 +4,7 @@ import { DEFAULT_MEMBERS, type Member, type Sender } from "@/lib/types";
 
 export const MEMBER_NAME_MAX_LENGTH = 24;
 const MEMBER_NAME_PATTERN = /^[^\s@]{1,24}$/u;
+const MEMBERS_CACHE_TTL_MS = 15000;
 
 type DbMember = {
   id: string;
@@ -12,6 +13,13 @@ type DbMember = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+let defaultMembersPromise: Promise<void> | null = null;
+let membersCache: { members: Member[]; expiresAt: number } | null = null;
+
+export function invalidateMembersCache() {
+  membersCache = null;
+}
 
 export function normalizeMemberName(name: string) {
   return name.trim();
@@ -44,14 +52,18 @@ export function serializeMember(member: DbMember): Member {
 }
 
 export async function ensureDefaultMembers() {
-  await prisma.member.createMany({
-    data: DEFAULT_MEMBERS.map((member) => ({
-      id: member.id,
-      name: member.name,
-      isProtected: member.isProtected
-    })),
-    skipDuplicates: true
-  });
+  defaultMembersPromise ??= prisma.member
+    .createMany({
+      data: DEFAULT_MEMBERS.map((member) => ({
+        id: member.id,
+        name: member.name,
+        isProtected: member.isProtected
+      })),
+      skipDuplicates: true
+    })
+    .then(() => undefined);
+
+  await defaultMembersPromise;
 }
 
 function sortMembers(members: DbMember[]) {
@@ -70,6 +82,10 @@ function sortMembers(members: DbMember[]) {
 }
 
 export async function getMembers() {
+  if (membersCache && membersCache.expiresAt > Date.now()) {
+    return membersCache.members;
+  }
+
   await ensureDefaultMembers();
 
   const members = await prisma.member.findMany({
@@ -78,19 +94,17 @@ export async function getMembers() {
     }
   });
 
-  return sortMembers(members).map(serializeMember);
+  const serializedMembers = sortMembers(members).map(serializeMember);
+  membersCache = {
+    members: serializedMembers,
+    expiresAt: Date.now() + MEMBERS_CACHE_TTL_MS
+  };
+
+  return serializedMembers;
 }
 
 export async function memberExists(sender: Sender) {
-  await ensureDefaultMembers();
-
-  const count = await prisma.member.count({
-    where: {
-      id: sender
-    }
-  });
-
-  return count > 0;
+  return (await getMembers()).some((member) => member.id === sender);
 }
 
 export async function createMember(name: string) {
@@ -107,6 +121,7 @@ export async function createMember(name: string) {
         name: validated.name
       }
     });
+    invalidateMembersCache();
 
     return {
       ok: true as const,
