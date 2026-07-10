@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Save, Trash2, X } from "lucide-react";
+import { Database, Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Member } from "@/lib/types";
 
@@ -14,6 +14,11 @@ type ApiError = {
   error?: unknown;
 };
 
+type DatabaseUsage = {
+  bytes: number;
+  formatted: string;
+};
+
 async function readApiError(response: Response, fallback: string) {
   const data = (await response.json().catch(() => null)) as ApiError | null;
   return typeof data?.error === "string" ? data.error : fallback;
@@ -24,6 +29,8 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
   const [newName, setNewName] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [databaseUsage, setDatabaseUsage] = useState<DatabaseUsage | null>(null);
+  const [databaseUsageError, setDatabaseUsageError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraftNames(
@@ -36,6 +43,40 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
       )
     );
   }, [members]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDatabaseUsage() {
+      try {
+        const response = await fetch("/api/admin/database-usage", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          throw new Error(await readApiError(response, "資料庫容量載入失敗"));
+        }
+
+        const data = (await response.json()) as DatabaseUsage;
+
+        if (isMounted) {
+          setDatabaseUsage(data);
+          setDatabaseUsageError(null);
+        }
+      } catch (usageError) {
+        if (isMounted) {
+          setDatabaseUsage(null);
+          setDatabaseUsageError(usageError instanceof Error ? usageError.message : "資料庫容量載入失敗");
+        }
+      }
+    }
+
+    void loadDatabaseUsage();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const canAdd = useMemo(() => Boolean(newName.trim()) && !busyId, [busyId, newName]);
 
@@ -154,6 +195,20 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
         </header>
 
         <div className="space-y-3 p-4">
+          <div className="flex items-center justify-between rounded-lg border border-line bg-slate-50 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-slate-600">
+                <Database size={16} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500">資料庫容量</p>
+                <p className="truncate text-sm font-semibold text-ink">
+                  {databaseUsage ? `已使用 ${databaseUsage.formatted}` : databaseUsageError ? "載入失敗" : "載入中"}
+                </p>
+              </div>
+            </div>
+          </div>
+
           <form
             className="flex gap-2"
             onSubmit={(event) => {
