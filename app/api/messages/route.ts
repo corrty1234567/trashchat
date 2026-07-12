@@ -12,6 +12,7 @@ const messageInputSchema = z
     text: z.string().trim().max(4000).optional(),
     imageUrl: z.string().url().optional(),
     imageUrls: z.array(z.string().url()).max(10).optional(),
+    thumbnailUrls: z.array(z.string().url()).max(10).optional(),
     replyToMessageId: z.string().cuid().optional()
   })
   .refine((data) => Boolean(data.text?.trim() || data.imageUrl || data.imageUrls?.length), {
@@ -39,6 +40,7 @@ const messageInclude = {
       text: true,
       imageUrl: true,
       imageUrls: true,
+      thumbnailUrls: true,
       createdAt: true,
       editedAt: true,
       recalledAt: true
@@ -68,13 +70,20 @@ function getImageUrls(message: MessageInput) {
   return urls.slice(0, 10);
 }
 
+function getThumbnailUrls(message: MessageInput) {
+  return (message.thumbnailUrls ?? []).slice(0, 10);
+}
+
 function createMessage(message: MessageInput) {
+  const imageUrls = getImageUrls(message);
+
   return prisma.message.create({
     data: {
-      imageUrls: getImageUrls(message),
+      imageUrls,
+      thumbnailUrls: getThumbnailUrls(message),
       sender: message.sender,
       text: message.text?.trim() || null,
-      imageUrl: getImageUrls(message)[0] ?? null,
+      imageUrl: imageUrls[0] ?? null,
       replyToMessageId: message.replyToMessageId ?? null
     },
     include: messageInclude

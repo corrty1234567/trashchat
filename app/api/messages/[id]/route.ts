@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { canEditMessage } from "@/lib/time";
+import { deleteBlobUrls, getMessageBlobUrls } from "@/lib/blob-storage";
 import { prisma } from "@/lib/prisma";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
 
@@ -23,6 +24,7 @@ const messageInclude = {
       text: true,
       imageUrl: true,
       imageUrls: true,
+      thumbnailUrls: true,
       createdAt: true,
       editedAt: true,
       recalledAt: true
@@ -120,11 +122,13 @@ export async function DELETE(request: Request, context: RouteContext) {
       text: null,
       imageUrl: null,
       imageUrls: [],
+      thumbnailUrls: [],
       recalledAt: new Date()
     },
     include: messageInclude
   });
 
+  void deleteBlobUrls(getMessageBlobUrls(existing));
   void notifyMessagesChanged({ type: "recalled", id: message.id });
 
   return NextResponse.json({ message });

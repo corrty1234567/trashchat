@@ -1,7 +1,7 @@
 "use client";
 
 import Pusher from "pusher-js";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
@@ -11,7 +11,7 @@ import { MessageBubble } from "@/components/message-bubble";
 import { VoiceCall } from "@/components/voice-call";
 import { mentionsSender } from "@/lib/mentions";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
-import { getMessageMinuteKey } from "@/lib/time";
+import { formatMessageTime, getMessageMinuteKey } from "@/lib/time";
 import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
 type ChatRoomProps = {
@@ -33,7 +33,10 @@ const OLDER_MESSAGE_LIMIT = 60;
 const MESSAGE_LOAD_TOP_OFFSET_PX = 220;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
+const THUMBNAIL_MAX_DIMENSION = 420;
+const THUMBNAIL_QUALITY = 0.72;
 const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
+const SEARCH_DEBOUNCE_MS = 250;
 const TYPING_IDLE_MS = 1200;
 const TYPING_EXPIRE_MS = 3200;
 
@@ -121,6 +124,7 @@ function toReplyMessage(message: Message): Message["replyTo"] {
     text: message.text,
     imageUrl: message.imageUrl,
     imageUrls: message.imageUrls ?? [],
+    thumbnailUrls: message.thumbnailUrls ?? [],
     createdAt: message.createdAt,
     editedAt: message.editedAt,
     recalledAt: message.recalledAt
@@ -201,6 +205,32 @@ async function compressImage(file: File) {
   throw new Error(`圖片太大，壓縮後仍超過 ${formatFileSize(MAX_SERVER_UPLOAD_BYTES)}。`);
 }
 
+async function createThumbnail(file: File) {
+  if (file.type === "image/gif") {
+    return file;
+  }
+
+  const image = await readImage(file);
+  const scale = Math.min(1, THUMBNAIL_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("?汗?函蝮桀?蝮桀???");
+  }
+
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const blob = await canvasToBlob(canvas, THUMBNAIL_QUALITY);
+
+  return new File([blob], file.name.replace(/\.[^.]+$/, "-thumb.jpg"), {
+    type: "image/jpeg",
+    lastModified: Date.now()
+  });
+}
+
 async function readApiError(response: Response, fallback: string) {
   const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
   return typeof data?.error === "string" ? data.error : fallback;
@@ -218,6 +248,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Message[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [typingSender, setTypingSender] = useState<Sender | null>(null);
   const [isPageActive, setIsPageActive] = useState(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -620,6 +655,70 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     window.setTimeout(() => setHighlightedId((current) => (current === messageId ? null : current)), 1400);
   }
 
+  useEffect(() => {
+    const query = searchQuery.trim();
+
+    if (!isSearchOpen || !query) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      const searchParams = new URLSearchParams({
+        q: query,
+        limit: "20"
+      });
+
+      setIsSearchLoading(true);
+      setSearchError(null);
+
+      void fetch(`/api/messages/search?${searchParams.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(await readApiError(response, "搜尋失敗"));
+          }
+
+          return (await response.json()) as { messages: Message[] };
+        })
+        .then((data) => {
+          setSearchResults(data.messages);
+        })
+        .catch((searchLoadError) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setSearchResults([]);
+          setSearchError(searchLoadError instanceof Error ? searchLoadError.message : "搜尋失敗");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsSearchLoading(false);
+          }
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [isSearchOpen, searchQuery]);
+
+  function handleSearchResultClick(message: Message) {
+    mergeMessagesIntoState([message]);
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+
+    window.setTimeout(() => focusMessage(message.id), 0);
+  }
+
   async function uploadImage(file: File) {
     const uploadFile = await compressImage(file);
     const formData = new FormData();
@@ -750,6 +849,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
           text: payload.text || null,
           imageUrl: localImageUrls[0] ?? null,
           imageUrls: localImageUrls,
+          thumbnailUrls: localImageUrls,
           createdAt: now,
           updatedAt: now,
           editedAt: null,
@@ -765,7 +865,10 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         setReplyTo(null);
 
         try {
-          const uploadedImageUrls = await Promise.all(imageFiles.map((file) => uploadImage(file)));
+          const [uploadedImageUrls, uploadedThumbnailUrls] = await Promise.all([
+            Promise.all(imageFiles.map((file) => uploadImage(file))),
+            Promise.all(imageFiles.map((file) => createThumbnail(file).then((thumbnail) => uploadImage(thumbnail))))
+          ]);
 
           const response = await fetch("/api/messages", {
             method: "POST",
@@ -777,6 +880,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
               text: payload.text || undefined,
               imageUrl: uploadedImageUrls[0],
               imageUrls: uploadedImageUrls,
+              thumbnailUrls: uploadedThumbnailUrls,
               replyToMessageId: replyTarget?.id
             })
           });
@@ -824,6 +928,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       text: null,
       imageUrl: null,
       imageUrls: [],
+      thumbnailUrls: [],
       updatedAt: recalledAt,
       recalledAt
     };
@@ -959,6 +1064,23 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const nextIsSearchOpen = !isSearchOpen;
+                setIsSearchOpen(nextIsSearchOpen);
+
+                if (!nextIsSearchOpen) {
+                  setSearchQuery("");
+                  setSearchResults([]);
+                  setSearchError(null);
+                }
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+              aria-label="搜尋訊息"
+            >
+              {isSearchOpen ? <X size={17} /> : <Search size={17} />}
+            </button>
             <VoiceCall sender={sender} members={members} />
             <button
               type="button"
@@ -970,6 +1092,51 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
             </button>
           </div>
         </div>
+        {isSearchOpen ? (
+          <div className="mx-auto mt-3 max-w-5xl">
+            <div className="relative">
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                autoFocus
+                placeholder="搜尋訊息"
+                className="h-10 w-full rounded-md border border-line bg-slate-50 px-3 pr-10 text-sm outline-none transition focus:border-brand focus:bg-white focus:ring-4 focus:ring-brand/10"
+              />
+              <Search className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+
+              {searchQuery.trim() ? (
+                <div className="absolute left-0 right-0 top-12 z-30 max-h-72 overflow-y-auto rounded-md border border-line bg-white p-1 shadow-soft">
+                  {isSearchLoading ? (
+                    <div className="px-3 py-3 text-sm text-slate-500">搜尋中...</div>
+                  ) : searchError ? (
+                    <div className="px-3 py-3 text-sm text-red-600">{searchError}</div>
+                  ) : searchResults.length === 0 ? (
+                    <div className="px-3 py-3 text-sm text-slate-500">沒有找到訊息</div>
+                  ) : (
+                    searchResults.map((message) => {
+                      const preview = message.text?.trim() || (message.imageUrls.length > 0 ? "圖片訊息" : "訊息");
+
+                      return (
+                        <button
+                          type="button"
+                          key={message.id}
+                          onClick={() => handleSearchResultClick(message)}
+                          className="block w-full rounded-md px-3 py-2 text-left transition hover:bg-slate-50"
+                        >
+                          <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                            <span>{getSenderLabel(message.sender, members)}</span>
+                            <span>{formatMessageTime(message.createdAt)}</span>
+                          </div>
+                          <div className="mt-1 truncate text-sm text-ink">{preview}</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </header>
 
       <section

@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { LinkifiedText } from "@/components/linkified-text";
 import { LinkPreviewCard } from "@/components/link-preview-card";
 import { getFirstUrl } from "@/lib/links";
-import { getMessageImageUrls, getReplyPreview } from "@/lib/messages";
+import { getMessageImageUrls, getMessageThumbnailUrls, getReplyPreview } from "@/lib/messages";
 import { canEditMessage, formatMessageTime } from "@/lib/time";
 import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
@@ -28,15 +28,18 @@ type MessageBubbleProps = {
 
 type MessageImageStackProps = {
   imageUrls: string[];
+  thumbnailUrls: string[];
   isOwn: boolean;
   senderLabel: string;
   onOpenImages: (urls: string[], index?: number) => void;
 };
 
-function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: MessageImageStackProps) {
+function MessageImageStack({ imageUrls, thumbnailUrls, isOwn, senderLabel, onOpenImages }: MessageImageStackProps) {
   if (imageUrls.length === 0) {
     return null;
   }
+
+  const previewUrls = thumbnailUrls.length > 0 ? thumbnailUrls : imageUrls;
 
   if (imageUrls.length === 1) {
     return (
@@ -47,7 +50,7 @@ function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: Mess
         aria-label="開啟圖片預覽"
       >
         <img
-          src={imageUrls[0]}
+          src={previewUrls[0] ?? imageUrls[0]}
           alt="聊天圖片"
           loading="lazy"
           decoding="async"
@@ -58,7 +61,7 @@ function MessageImageStack({ imageUrls, isOwn, senderLabel, onOpenImages }: Mess
   }
 
   const visibleBackCards = Math.min(imageUrls.length - 1, 3);
-  const previewUrl = imageUrls[0];
+  const previewUrl = previewUrls[0] ?? imageUrls[0];
 
   return (
     <div className="mb-2">
@@ -118,6 +121,7 @@ export function MessageBubble({
   const isClientOnly = Boolean(message.clientStatus);
   const editable = isOwn && !isClientOnly && canEditMessage(message.createdAt, message.recalledAt);
   const imageUrls = isRecalled ? [] : getMessageImageUrls(message);
+  const thumbnailUrls = isRecalled ? [] : getMessageThumbnailUrls(message);
   const hasVisibleContent = !isRecalled && (message.text || imageUrls.length > 0);
   const hasStatus = Boolean(message.editedAt && !isRecalled) || Boolean(message.clientStatus);
   const showMeta = showTimestamp || hasStatus;
@@ -197,9 +201,9 @@ export function MessageBubble({
                     : "border-brand bg-slate-50 text-slate-600 hover:bg-slate-100"
                 )}
               >
-                {getMessageImageUrls(message.replyTo).length > 0 && !message.replyTo.recalledAt ? (
+                {getMessageThumbnailUrls(message.replyTo).length > 0 && !message.replyTo.recalledAt ? (
                   <img
-                    src={getMessageImageUrls(message.replyTo)[0]}
+                    src={getMessageThumbnailUrls(message.replyTo)[0]}
                     alt="回覆圖片縮圖"
                     loading="lazy"
                     decoding="async"
@@ -216,6 +220,7 @@ export function MessageBubble({
 
             <MessageImageStack
               imageUrls={imageUrls}
+              thumbnailUrls={thumbnailUrls}
               isOwn={isOwn}
               senderLabel={isOwn ? "你" : getSenderLabel(message.sender, members)}
               onOpenImages={onOpenImages}

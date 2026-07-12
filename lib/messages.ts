@@ -13,6 +13,20 @@ export function getMessageImageUrls(message: Pick<Message, "imageUrl" | "imageUr
   return message.imageUrl ? [message.imageUrl] : [];
 }
 
+export function getMessageThumbnailUrls(
+  message: Pick<Message, "imageUrl" | "imageUrls" | "thumbnailUrls"> | Message["replyTo"]
+) {
+  if (!message) {
+    return [];
+  }
+
+  if (message.thumbnailUrls?.length) {
+    return message.thumbnailUrls;
+  }
+
+  return getMessageImageUrls(message);
+}
+
 export function getReplyPreview(message: Message["replyTo"]) {
   if (!message) {
     return "原訊息不存在";

@@ -22,6 +22,7 @@ export type Message = {
   text: string | null;
   imageUrl: string | null;
   imageUrls: string[];
+  thumbnailUrls: string[];
   createdAt: string;
   updatedAt: string;
   editedAt: string | null;
@@ -46,6 +47,7 @@ export type ReplyMessage = {
   text: string | null;
   imageUrl: string | null;
   imageUrls: string[];
+  thumbnailUrls: string[];
   createdAt: string;
   editedAt: string | null;
   recalledAt: string | null;

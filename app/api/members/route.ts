@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { requireAdmin } from "@/lib/admin-auth";
 import { createMember, getMembers } from "@/lib/members";
 
 export const runtime = "nodejs";
@@ -15,6 +16,12 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const adminError = requireAdmin(request);
+
+  if (adminError) {
+    return adminError;
+  }
+
   const parsed = createMemberSchema.safeParse(await request.json());
 
   if (!parsed.success) {

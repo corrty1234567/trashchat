@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -25,7 +26,13 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const adminError = requireAdmin(request);
+
+  if (adminError) {
+    return adminError;
+  }
+
   const [usage] = await prisma.$queryRaw<DatabaseUsageRow[]>`
     SELECT pg_database_size(current_database()) AS bytes
   `;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { requireAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { ensureDefaultMembers, invalidateMembersCache, serializeMember, validateMemberName } from "@/lib/members";
 
@@ -17,6 +18,12 @@ type RouteContext = {
 };
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const adminError = requireAdmin(request);
+
+  if (adminError) {
+    return adminError;
+  }
+
   const { id } = await context.params;
   const parsed = updateMemberSchema.safeParse(await request.json());
 
@@ -55,7 +62,13 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  const adminError = requireAdmin(request);
+
+  if (adminError) {
+    return adminError;
+  }
+
   const { id } = await context.params;
 
   await ensureDefaultMembers();
