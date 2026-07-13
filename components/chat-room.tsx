@@ -3,6 +3,7 @@
 import Pusher from "pusher-js";
 import { ArrowLeft, RefreshCw, Search, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AdminSnakeGate } from "@/components/admin-snake-gate";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -376,6 +377,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [error, setError] = useState<string | null>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [titleLetters, setTitleLetters] = useState<TitleLetter[]>(() => createTitleLetters());
+  const [isSnakeGateOpen, setIsSnakeGateOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
@@ -1287,7 +1289,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
       if (sender === ADMIN_SENDER_ID && getTitleText(nextLetters).toLowerCase() === ADMIN_TITLE_TRIGGER) {
         window.setTimeout(() => {
-          setIsAdminOpen(true);
+          setIsSnakeGateOpen(true);
           setTitleLetters(createTitleLetters());
         }, 0);
       }
@@ -1311,7 +1313,15 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
             換身分
           </button>
 
-          <div className="min-w-0 text-center">
+          <div className="relative min-w-0 text-center">
+            {sender === ADMIN_SENDER_ID ? (
+              <button
+                type="button"
+                onClick={() => setIsSnakeGateOpen(true)}
+                className="absolute inset-x-0 top-0 z-10 h-7 cursor-pointer rounded-sm outline-none focus:ring-4 focus:ring-brand/15"
+                aria-label="開啟 trashchat"
+              />
+            ) : null}
             {sender === ADMIN_SENDER_ID ? (
               <div className="inline-flex justify-center text-lg font-semibold leading-7" aria-label="拖曳 trashchat 字母">
                 {titleLetters.map((letter, index) => (
@@ -1508,6 +1518,16 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
       {isAdminOpen ? (
         <MemberAdminPanel members={members} onMembersChange={onMembersChange} onClose={() => setIsAdminOpen(false)} />
+      ) : null}
+
+      {isSnakeGateOpen ? (
+        <AdminSnakeGate
+          onClose={() => setIsSnakeGateOpen(false)}
+          onUnlock={() => {
+            setIsSnakeGateOpen(false);
+            setIsAdminOpen(true);
+          }}
+        />
       ) : null}
 
       <ImageLightbox

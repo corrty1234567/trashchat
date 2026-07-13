@@ -1,7 +1,20 @@
 "use client";
 
 import clsx from "clsx";
-import { Eraser, HardDrive, MessagesSquare, Plus, RefreshCw, Save, Search, Trash2, Undo2, Users, X } from "lucide-react";
+import {
+  Database,
+  Eraser,
+  HardDrive,
+  MessagesSquare,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  Trash2,
+  Undo2,
+  Users,
+  X
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getMessageImageUrls } from "@/lib/messages";
 import { formatMessageTime } from "@/lib/time";
@@ -17,9 +30,12 @@ type ApiError = {
   error?: unknown;
 };
 
-type BlobUsage = {
+type StorageUsage = {
   bytes: number;
   formatted: string;
+};
+
+type BlobUsage = StorageUsage & {
   count: number;
 };
 
@@ -28,8 +44,6 @@ type CleanupResult = {
 };
 
 type AdminTab = "members" | "messages";
-
-const ADMIN_CODE = "chashtrat";
 
 async function readApiError(response: Response, fallback: string) {
   const data = (await response.json().catch(() => null)) as ApiError | null;
@@ -60,11 +74,13 @@ function getMessagePreview(message: Message) {
 
 export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAdminPanelProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>("members");
-  const [isAdminReady, setIsAdminReady] = useState(false);
+  const [isAdminReady, setIsAdminReady] = useState(true);
   const [draftNames, setDraftNames] = useState<Record<string, string>>({});
   const [newName, setNewName] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [databaseUsage, setDatabaseUsage] = useState<StorageUsage | null>(null);
+  const [databaseUsageError, setDatabaseUsageError] = useState<string | null>(null);
   const [blobUsage, setBlobUsage] = useState<BlobUsage | null>(null);
   const [blobUsageError, setBlobUsageError] = useState<string | null>(null);
   const [adminMessages, setAdminMessages] = useState<Message[]>([]);
@@ -84,18 +100,23 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
     );
   }, [members]);
 
-  const ensureAdminSession = useCallback(async () => {
-    const response = await fetch("/api/admin/session", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      credentials: "same-origin",
-      body: JSON.stringify({ code: ADMIN_CODE })
-    });
+  const loadDatabaseUsage = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/database-usage", {
+        cache: "no-store",
+        credentials: "same-origin"
+      });
 
-    if (!response.ok) {
-      throw new Error(await readApiError(response, "無法開啟管理員模式"));
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "無法讀取資料庫容量"));
+      }
+
+      const data = (await response.json()) as StorageUsage;
+      setDatabaseUsage(data);
+      setDatabaseUsageError(null);
+    } catch (usageError) {
+      setDatabaseUsage(null);
+      setDatabaseUsageError(usageError instanceof Error ? usageError.message : "無法讀取資料庫容量");
     }
   }, []);
 
@@ -142,39 +163,18 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
 
       const data = (await response.json()) as { messages: Message[] };
       setAdminMessages(data.messages);
+      setError(null);
     } catch (messageError) {
       setError(messageError instanceof Error ? messageError.message : "無法讀取訊息");
+      setIsAdminReady(false);
     } finally {
       setIsLoadingMessages(false);
     }
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function initAdmin() {
-      try {
-        await ensureAdminSession();
-
-        if (!isMounted) {
-          return;
-        }
-
-        setIsAdminReady(true);
-        await Promise.all([loadBlobUsage(), loadAdminMessages("")]);
-      } catch (adminError) {
-        if (isMounted) {
-          setError(adminError instanceof Error ? adminError.message : "無法開啟管理員模式");
-        }
-      }
-    }
-
-    void initAdmin();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [ensureAdminSession, loadAdminMessages, loadBlobUsage]);
+    void Promise.all([loadDatabaseUsage(), loadBlobUsage(), loadAdminMessages("")]);
+  }, [loadAdminMessages, loadBlobUsage, loadDatabaseUsage]);
 
   useEffect(() => {
     if (!isAdminReady || activeTab !== "messages") {
@@ -328,7 +328,7 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
       setAdminMessages((currentMessages) =>
         currentMessages.map((currentMessage) => (currentMessage.id === message.id ? data.message : currentMessage))
       );
-      void loadBlobUsage();
+      void Promise.all([loadDatabaseUsage(), loadBlobUsage()]);
     } catch (recallError) {
       setAdminMessages((currentMessages) =>
         currentMessages.map((currentMessage) => (currentMessage.id === message.id ? message : currentMessage))
@@ -360,6 +360,7 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
 
       const data = (await response.json()) as CleanupResult;
       setCleanupStatus(`已清理 ${data.callSignalsDeleted} 筆舊通話資料`);
+      void loadDatabaseUsage();
     } catch (cleanupError) {
       setError(cleanupError instanceof Error ? cleanupError.message : "清理失敗");
     } finally {
@@ -383,7 +384,19 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
         </header>
 
         <div className="border-b border-line bg-slate-50 px-4 py-3">
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto] md:items-stretch">
+            <div className="flex min-w-0 items-center gap-3 rounded-md border border-line bg-white px-3 py-2">
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700">
+                <Database size={17} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500">資料庫容量</p>
+                <p className="truncate text-sm font-semibold text-ink">
+                  {databaseUsage ? `已使用 ${databaseUsage.formatted}` : databaseUsageError ?? "讀取中..."}
+                </p>
+              </div>
+            </div>
+
             <div className="flex min-w-0 items-center gap-3 rounded-md border border-line bg-white px-3 py-2">
               <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700">
                 <HardDrive size={17} />
@@ -391,15 +404,17 @@ export function MemberAdminPanel({ members, onMembersChange, onClose }: MemberAd
               <div className="min-w-0">
                 <p className="text-xs font-medium text-slate-500">Blob 儲存容量</p>
                 <p className="truncate text-sm font-semibold text-ink">
-                  {blobUsage ? `${blobUsage.formatted} / ${blobUsage.count} 個檔案` : blobUsageError ?? "讀取中..."}
+                  {blobUsage ? `已使用 ${blobUsage.formatted}` : blobUsageError ?? "讀取中..."}
                 </p>
+                <p className="text-xs text-slate-500">{blobUsage ? `檔案 ${blobUsage.count} 個` : " "}</p>
               </div>
             </div>
+
             <button
               type="button"
               onClick={() => void cleanupOldData()}
               disabled={busyId === "cleanup" || !isAdminReady}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45 md:h-auto"
             >
               <Eraser size={16} />
               清理舊資料
