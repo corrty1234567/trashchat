@@ -107,6 +107,12 @@ export function AdminSnakeGate({ onClose, onUnlock }: AdminSnakeGateProps) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+
+      if (isPasswordVisible || target?.closest("input, textarea, select") || target?.isContentEditable) {
+        return;
+      }
+
       if (event.key === "ArrowUp" || event.key.toLowerCase() === "w") {
         event.preventDefault();
         chooseDirection("up");
@@ -125,10 +131,10 @@ export function AdminSnakeGate({ onClose, onUnlock }: AdminSnakeGateProps) {
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [chooseDirection]);
+  }, [chooseDirection, isPasswordVisible]);
 
   useEffect(() => {
-    if (isGameOver) {
+    if (isGameOver || isPasswordVisible) {
       return;
     }
 
@@ -158,7 +164,7 @@ export function AdminSnakeGate({ onClose, onUnlock }: AdminSnakeGateProps) {
     }, TICK_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [food, isGameOver]);
+  }, [food, isGameOver, isPasswordVisible]);
 
   function handlePointerUp(clientX: number, clientY: number) {
     const start = touchStartRef.current;
