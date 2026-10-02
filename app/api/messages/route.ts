@@ -1,14 +1,15 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getMembers } from "@/lib/members";
-import { notifyMessagesChanged } from "@/lib/pusher-server";
+import { messageInclude, messageReplySelect, serializeMessage } from "@/lib/message-data";
+import { hasRealtimeMessaging, notifyMessagesChanged } from "@/lib/pusher-server";
 
 export const runtime = "nodejs";
 
 const messageInputSchema = z
   .object({
     sender: z.string().trim().min(1).max(120),
+    clientRequestId: z.string().min(1).max(120).optional(),
     text: z.string().trim().max(4000).optional(),
     imageUrl: z.string().url().optional(),
     imageUrls: z.array(z.string().url()).max(10).optional(),
@@ -31,33 +32,6 @@ const getMessagesSchema = z.object({
   beforeCreatedAt: z.string().datetime().optional(),
   beforeId: z.string().optional()
 });
-
-const messageInclude = {
-  replyTo: {
-    select: {
-      id: true,
-      sender: true,
-      text: true,
-      imageUrl: true,
-      imageUrls: true,
-      thumbnailUrls: true,
-      createdAt: true,
-      editedAt: true,
-      recalledAt: true
-    }
-  },
-  reads: {
-    select: {
-      id: true,
-      messageId: true,
-      sender: true,
-      readAt: true
-    },
-    orderBy: {
-      readAt: "asc"
-    }
-  }
-} as const;
 
 type MessageInput = z.infer<typeof messageInputSchema>;
 
@@ -85,8 +59,7 @@ function createMessage(message: MessageInput) {
       text: message.text?.trim() || null,
       imageUrl: imageUrls[0] ?? null,
       replyToMessageId: message.replyToMessageId ?? null
-    },
-    include: messageInclude
+    }
   });
 }
 
@@ -136,7 +109,7 @@ export async function GET(request: Request) {
   const hasMore = messagesDesc.length > parsed.data.limit;
   const messages = messagesDesc.slice(0, parsed.data.limit).reverse();
 
-  return NextResponse.json({ messages, hasMore });
+  return NextResponse.json({ messages, hasMore, realtimeAvailable: hasRealtimeMessaging() });
 }
 
 export async function POST(request: Request) {
@@ -147,13 +120,7 @@ export async function POST(request: Request) {
   }
 
   const messageInputs = getMessageInputs(parsed.data);
-  const memberIds = new Set((await getMembers()).map((member) => member.id));
-  const invalidSender = messageInputs.find((message) => !memberIds.has(message.sender));
-
-  if (invalidSender) {
-    return NextResponse.json({ error: "Sender does not exist." }, { status: 400 });
-  }
-
+  const senderIds = [...new Set(messageInputs.map((message) => message.sender))];
   const replyTargetIds = [
     ...new Set(
       messageInputs
@@ -162,25 +129,35 @@ export async function POST(request: Request) {
     )
   ];
 
-  if (replyTargetIds.length > 0) {
-    const repliedMessages = await prisma.message.findMany({
-      where: {
-        id: {
-          in: replyTargetIds
-        }
-      },
-      select: { id: true }
-    });
+  const [memberCount, repliedMessages] = await Promise.all([
+    prisma.member.count({ where: { id: { in: senderIds } } }),
+    replyTargetIds.length > 0
+      ? prisma.message.findMany({ where: { id: { in: replyTargetIds } }, select: messageReplySelect })
+      : Promise.resolve([])
+  ]);
 
-    if (repliedMessages.length !== replyTargetIds.length) {
-      return NextResponse.json({ error: "Reply target does not exist." }, { status: 400 });
-    }
+  if (memberCount !== senderIds.length) {
+    return NextResponse.json({ error: "Sender does not exist." }, { status: 400 });
   }
 
-  const messages =
-    messageInputs.length === 1 ? [await createMessage(messageInputs[0])] : await prisma.$transaction(messageInputs.map(createMessage));
+  if (repliedMessages.length !== replyTargetIds.length) {
+    return NextResponse.json({ error: "Reply target does not exist." }, { status: 400 });
+  }
 
-  void notifyMessagesChanged({ type: "created", id: messages[0]?.id });
+  const createdMessages =
+    messageInputs.length === 1 ? [await createMessage(messageInputs[0])] : await prisma.$transaction(messageInputs.map(createMessage));
+  const repliesById = new Map(repliedMessages.map((message) => [message.id, message]));
+  const messages = createdMessages.map((message) =>
+    serializeMessage({ ...message, reads: [], replyTo: repliesById.get(message.replyToMessageId ?? "") ?? null })
+  );
+
+  // Start publishing now and keep Vercel alive until delivery finishes.
+  after(Promise.all(messages.map((message, index) => notifyMessagesChanged({
+    type: "created",
+    id: message.id,
+    message,
+    clientRequestId: messageInputs[index].clientRequestId
+  }))));
 
   if ("messages" in parsed.data) {
     return NextResponse.json({ messages }, { status: 201 });

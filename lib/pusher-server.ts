@@ -1,7 +1,9 @@
+import { Agent } from "node:https";
 import Pusher from "pusher";
-import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED } from "@/lib/realtime";
+import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, type MessageChangedEvent } from "@/lib/realtime";
 
 let pusherServer: Pusher | null = null;
+const MAX_MESSAGE_EVENT_BYTES = 9500;
 
 function getPusherServer() {
   const appId = process.env.PUSHER_APP_ID;
@@ -18,15 +20,26 @@ function getPusherServer() {
     key,
     secret,
     cluster,
-    useTLS: true
+    useTLS: true,
+    agent: new Agent({ keepAlive: true }),
+    timeout: 5000
   });
 
   return pusherServer;
 }
 
-export async function notifyMessagesChanged(payload: { type: "created" | "edited" | "recalled" | "read"; id?: string; sender?: string }) {
+export function hasRealtimeMessaging() {
+  return getPusherServer() !== null;
+}
+
+export async function notifyMessagesChanged(payload: MessageChangedEvent) {
   try {
-    await triggerRealtimeEvent(PUSHER_EVENT_MESSAGES_CHANGED, payload);
+    // Pusher limits event data to 10 KB; large messages use a targeted HTTP fetch.
+    const eventPayload = { ...payload };
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_MESSAGE_EVENT_BYTES) {
+      delete eventPayload.message;
+    }
+    await triggerRealtimeEvent(PUSHER_EVENT_MESSAGES_CHANGED, eventPayload);
   } catch (error) {
     console.error("Message realtime notification failed", error);
   }

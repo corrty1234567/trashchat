@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { canEditMessage } from "@/lib/time";
 import { deleteBlobUrls, getMessageBlobUrls } from "@/lib/blob-storage";
 import { prisma } from "@/lib/prisma";
+import { messageInclude, serializeMessage } from "@/lib/message-data";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
 
 export const runtime = "nodejs";
@@ -16,38 +17,22 @@ const recallMessageSchema = z.object({
   sender: z.string().trim().min(1).max(120)
 });
 
-const messageInclude = {
-  replyTo: {
-    select: {
-      id: true,
-      sender: true,
-      text: true,
-      imageUrl: true,
-      imageUrls: true,
-      thumbnailUrls: true,
-      createdAt: true,
-      editedAt: true,
-      recalledAt: true
-    }
-  },
-  reads: {
-    select: {
-      id: true,
-      messageId: true,
-      sender: true,
-      readAt: true
-    },
-    orderBy: {
-      readAt: "asc"
-    }
-  }
-} as const;
-
 type RouteContext = {
   params: Promise<{
     id: string;
   }>;
 };
+
+export async function GET(_request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  const message = await prisma.message.findUnique({ where: { id }, include: messageInclude });
+
+  if (!message) {
+    return NextResponse.json({ error: "Message not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ message });
+}
 
 export async function PATCH(request: Request, context: RouteContext) {
   const { id } = await context.params;
@@ -82,7 +67,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     include: messageInclude
   });
 
-  void notifyMessagesChanged({ type: "edited", id: message.id });
+  after(notifyMessagesChanged({ type: "edited", id: message.id, message: serializeMessage(message) }));
 
   return NextResponse.json({ message });
 }
@@ -128,8 +113,8 @@ export async function DELETE(request: Request, context: RouteContext) {
     include: messageInclude
   });
 
-  void deleteBlobUrls(getMessageBlobUrls(existing));
-  void notifyMessagesChanged({ type: "recalled", id: message.id });
+  after(deleteBlobUrls(getMessageBlobUrls(existing)));
+  after(notifyMessagesChanged({ type: "recalled", id: message.id, message: serializeMessage(message) }));
 
   return NextResponse.json({ message });
 }

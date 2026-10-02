@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { memberExists } from "@/lib/members";
 import { prisma } from "@/lib/prisma";
@@ -68,7 +68,15 @@ export async function POST(request: Request) {
         readAt
       }
     });
-    await notifyMessagesChanged({ type: "read", sender: parsed.data.sender });
+    const messageIds = messages.map((message) => message.id);
+    after(Promise.all(Array.from({ length: Math.ceil(messageIds.length / 100) }, (_, index) =>
+      notifyMessagesChanged({
+        type: "read",
+        sender: parsed.data.sender,
+        messageIds: messageIds.slice(index * 100, (index + 1) * 100),
+        readAt: readAt.toISOString()
+      })
+    )));
   }
 
   return NextResponse.json({

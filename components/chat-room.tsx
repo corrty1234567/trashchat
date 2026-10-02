@@ -11,7 +11,8 @@ import { MemberAdminPanel } from "@/components/member-admin-panel";
 import { MessageBubble } from "@/components/message-bubble";
 import { VoiceCall } from "@/components/voice-call";
 import { mentionsSender } from "@/lib/mentions";
-import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
+import { applyReadReceipts, mergeLoadedMessages, sortMessagesByCreatedAt, toReplyMessage } from "@/lib/message-state";
+import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED, type MessageChangedEvent } from "@/lib/realtime";
 import { formatMessageTime, getMessageMinuteKey } from "@/lib/time";
 import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
@@ -26,7 +27,7 @@ const ADMIN_SENDER_ID = "CHEN";
 const ADMIN_TITLE_TEXT = "trashchat";
 const ADMIN_TITLE_TRIGGER = "chashtrat";
 
-const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 5000;
+const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1000;
 const MESSAGE_REALTIME_HEALTH_CHECK_MS = 60000;
 const MESSAGE_BACKGROUND_POLLING_INTERVAL_MS = 60000;
 const INITIAL_MESSAGE_LIMIT = 40;
@@ -64,10 +65,6 @@ function getTitleText(letters: TitleLetter[]) {
   return letters.map((letter) => letter.value).join("");
 }
 
-function sortMessagesByCreatedAt(messages: Message[]) {
-  return [...messages].sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime());
-}
-
 function getIsPageActive() {
   return document.visibilityState === "visible" && document.hasFocus();
 }
@@ -92,16 +89,6 @@ function getReadByLabels(message: Message, currentSender: Sender, members: reado
   );
 
   return [...readSenders].map((readSender) => getSenderLabel(readSender, members));
-}
-
-function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[]) {
-  const messagesById = new Map(currentMessages.map((message) => [message.id, message]));
-
-  loadedMessages.forEach((message) => {
-    messagesById.set(message.id, message);
-  });
-
-  return sortMessagesByCreatedAt([...messagesById.values()]);
 }
 
 function getEstimatedMessageHeight(message: Message) {
@@ -210,20 +197,6 @@ function getOptimisticId() {
   }
 
   return `optimistic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function toReplyMessage(message: Message): Message["replyTo"] {
-  return {
-    id: message.id,
-    sender: message.sender,
-    text: message.text,
-    imageUrl: message.imageUrl,
-    imageUrls: message.imageUrls ?? [],
-    thumbnailUrls: message.thumbnailUrls ?? [],
-    createdAt: message.createdAt,
-    editedAt: message.editedAt,
-    recalledAt: message.recalledAt
-  };
 }
 
 function formatFileSize(bytes: number) {
@@ -404,9 +377,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const pendingFocusMessageIdRef = useRef<string | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
   const realtimeConnectedRef = useRef(false);
+  const serverRealtimeAvailableRef = useRef(true);
   const typingStopTimerRef = useRef<number | null>(null);
   const otherTypingTimerRef = useRef<number | null>(null);
   const readSyncRef = useRef(false);
+  const pendingReadMessageIdsRef = useRef(new Set<string>());
   const hasSentTypingRef = useRef(false);
 
   useEffect(() => {
@@ -502,9 +477,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     };
   }, [syncVirtualViewport]);
 
-  const mergeMessagesIntoState = useCallback((loadedMessages: Message[]) => {
+  const mergeMessagesIntoState = useCallback((loadedMessages: Message[], optimisticId?: string) => {
     setMessages((currentMessages) => {
-      const mergedMessages = mergeLoadedMessages(currentMessages, loadedMessages);
+      const mergedMessages = mergeLoadedMessages(currentMessages, loadedMessages, optimisticId);
       messagesRef.current = mergedMessages;
       return mergedMessages;
     });
@@ -524,7 +499,8 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         throw new Error("無法載入訊息");
       }
 
-      const data = (await response.json()) as { messages: Message[]; hasMore: boolean };
+      const data = (await response.json()) as { messages: Message[]; hasMore: boolean; realtimeAvailable?: boolean };
+      serverRealtimeAvailableRef.current = data.realtimeAvailable !== false;
       hasMoreOlderMessagesRef.current = data.hasMore || hasMoreOlderMessagesRef.current;
       mergeMessagesIntoState(data.messages);
       return data;
@@ -666,7 +642,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         return MESSAGE_BACKGROUND_POLLING_INTERVAL_MS;
       }
 
-      return realtimeConnectedRef.current ? MESSAGE_REALTIME_HEALTH_CHECK_MS : MESSAGE_FALLBACK_POLLING_INTERVAL_MS;
+      return realtimeConnectedRef.current && serverRealtimeAvailableRef.current
+        ? MESSAGE_REALTIME_HEALTH_CHECK_MS
+        : MESSAGE_FALLBACK_POLLING_INTERVAL_MS;
     }
 
     function schedulePoll(delay = getPollingDelay()) {
@@ -675,7 +653,14 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       }
 
       timeoutId = window.setTimeout(() => {
-        void loadMessages()
+        // A reconnect must fetch a fresh snapshot even if an older request is still finishing.
+        void Promise.resolve(loadMessagesPromiseRef.current)
+          .catch(() => undefined)
+          .then(() => {
+            if (!isStopped) {
+              return loadMessages();
+            }
+          })
           .catch(() => undefined)
           .finally(() => {
             if (!isStopped) {
@@ -686,10 +671,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     }
 
     function handleVisibilityChange() {
-      schedulePoll();
+      schedulePoll(document.hidden ? MESSAGE_BACKGROUND_POLLING_INTERVAL_MS : 0);
     }
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("online", handleVisibilityChange);
 
     if (!key || !cluster) {
       realtimeConnectedRef.current = false;
@@ -698,6 +684,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       return () => {
         isStopped = true;
         document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("online", handleVisibilityChange);
 
         if (timeoutId) {
           window.clearTimeout(timeoutId);
@@ -708,19 +695,59 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     const pusher = new Pusher(key, { cluster });
     const channel = pusher.subscribe(PUSHER_CHANNEL);
     const handleStateChange = ({ current }: { current: string }) => {
-      const isConnected = current === "connected";
-      const wasConnected = realtimeConnectedRef.current;
-      realtimeConnectedRef.current = isConnected;
-
-      if (wasConnected !== isConnected) {
-        schedulePoll(isConnected ? MESSAGE_REALTIME_HEALTH_CHECK_MS : 0);
+      if (current !== "connected") {
+        realtimeConnectedRef.current = false;
+        schedulePoll(0);
       }
+    };
+    const handleSubscriptionSucceeded = () => {
+      realtimeConnectedRef.current = true;
+      // Catch messages sent while connecting or reconnecting before slowing polling.
+      schedulePoll(0);
+    };
+    const handleSubscriptionError = () => {
+      realtimeConnectedRef.current = false;
+      schedulePoll(0);
     };
 
     pusher.connection.bind("state_change", handleStateChange);
+    channel.bind("pusher:subscription_succeeded", handleSubscriptionSucceeded);
+    channel.bind("pusher:subscription_error", handleSubscriptionError);
 
-    channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, (event: { type?: string; sender?: Sender } | undefined) => {
-      if (event?.type === "read" && event.sender === sender) {
+    channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, (event: MessageChangedEvent | undefined) => {
+      if (event?.type === "read") {
+        if (event.sender === sender) {
+          return;
+        }
+
+        if (event.sender && event.messageIds && event.readAt) {
+          const { messageIds, sender: readSender, readAt } = event;
+          setMessages((currentMessages) => {
+            const nextMessages = applyReadReceipts(currentMessages, messageIds, readSender, readAt);
+            messagesRef.current = nextMessages;
+            return nextMessages;
+          });
+          return;
+        }
+      }
+
+      if (event?.message) {
+        const optimisticId = event.message.sender === sender ? event.clientRequestId : undefined;
+        mergeMessagesIntoState([event.message], optimisticId);
+        return;
+      }
+
+      if (event?.id) {
+        void fetch(`/api/messages/${encodeURIComponent(event.id)}`, { cache: "no-store" })
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error("Message synchronization failed.");
+            }
+
+            const data = (await response.json()) as { message: Message };
+            mergeMessagesIntoState([data.message], data.message.sender === sender ? event.clientRequestId : undefined);
+          })
+          .catch(() => void loadMessages().catch(() => undefined));
         return;
       }
 
@@ -748,6 +775,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       isStopped = true;
       realtimeConnectedRef.current = false;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleVisibilityChange);
 
       if (timeoutId) {
         window.clearTimeout(timeoutId);
@@ -760,7 +788,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       pusher.unsubscribe(PUSHER_CHANNEL);
       pusher.disconnect();
     };
-  }, [loadMessages, sender]);
+  }, [loadMessages, mergeMessagesIntoState, sender]);
 
   useEffect(() => {
     const optimisticImageUrls = optimisticImageUrlsRef.current;
@@ -857,26 +885,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
     const readAt = new Date().toISOString();
     const unreadMessageIds = unreadIncomingMessages.map((message) => message.id);
+    unreadMessageIds.forEach((id) => pendingReadMessageIdsRef.current.add(id));
 
-    setMessages((currentMessages) =>
-      currentMessages.map((message) =>
-        unreadMessageIds.includes(message.id) && !hasReadMessage(message, sender)
-          ? {
-              ...message,
-              readAt: message.readAt ?? readAt,
-              reads: [
-                ...(message.reads ?? []),
-                {
-                  id: `optimistic-read-${message.id}-${sender}`,
-                  messageId: message.id,
-                  sender,
-                  readAt
-                }
-              ]
-            }
-          : message
-      )
-    );
+    setMessages((currentMessages) => applyReadReceipts(currentMessages, unreadMessageIds, sender, readAt));
 
     if (readSyncRef.current) {
       return;
@@ -884,13 +895,24 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
     readSyncRef.current = true;
 
-    void fetch("/api/messages/read", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ sender, messageIds: unreadMessageIds })
-    })
+    void (async () => {
+      // Keep receipts for messages that arrive while another batch is being saved.
+      while (pendingReadMessageIdsRef.current.size > 0) {
+        const messageIds = [...pendingReadMessageIdsRef.current].slice(0, 500);
+        const response = await fetch("/api/messages/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sender, messageIds })
+        });
+
+        if (!response.ok) {
+          throw new Error("Read synchronization failed.");
+        }
+
+        messageIds.forEach((id) => pendingReadMessageIdsRef.current.delete(id));
+      }
+    })()
+      .catch(() => undefined)
       .finally(() => {
         readSyncRef.current = false;
       });
@@ -1150,10 +1172,12 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         setReplyTo(null);
 
         try {
-          const [uploadedImageUrls, uploadedThumbnailUrls] = await Promise.all([
-            Promise.all(imageFiles.map((file) => uploadImage(file))),
-            Promise.all(imageFiles.map((file) => createThumbnail(file).then((thumbnail) => uploadImage(thumbnail))))
-          ]);
+          const [uploadedImageUrls, uploadedThumbnailUrls] = imageFiles.length > 0
+            ? await Promise.all([
+                Promise.all(imageFiles.map((file) => uploadImage(file))),
+                Promise.all(imageFiles.map((file) => createThumbnail(file).then((thumbnail) => uploadImage(thumbnail))))
+              ])
+            : [[], []];
 
           const response = await fetch("/api/messages", {
             method: "POST",
@@ -1162,6 +1186,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
             },
             body: JSON.stringify({
               sender,
+              clientRequestId: tempId,
               text: payload.text || undefined,
               imageUrl: uploadedImageUrls[0],
               imageUrls: uploadedImageUrls,
@@ -1184,12 +1209,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
             }
           });
 
-          setMessages((currentMessages) =>
-            sortMessagesByCreatedAt([
-              ...currentMessages.filter((message) => message.id !== tempId && message.id !== data.message.id),
-              data.message
-            ])
-          );
+          mergeMessagesIntoState([data.message], tempId);
         } catch (sendError) {
           setMessages((currentMessages) =>
             currentMessages.map((message) => (message.id === tempId ? { ...message, clientStatus: "failed" } : message))

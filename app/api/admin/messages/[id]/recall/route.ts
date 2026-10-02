@@ -1,37 +1,11 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { deleteBlobUrls, getMessageBlobUrls } from "@/lib/blob-storage";
 import { prisma } from "@/lib/prisma";
+import { messageInclude, serializeMessage } from "@/lib/message-data";
 import { notifyMessagesChanged } from "@/lib/pusher-server";
 
 export const runtime = "nodejs";
-
-const messageInclude = {
-  replyTo: {
-    select: {
-      id: true,
-      sender: true,
-      text: true,
-      imageUrl: true,
-      imageUrls: true,
-      thumbnailUrls: true,
-      createdAt: true,
-      editedAt: true,
-      recalledAt: true
-    }
-  },
-  reads: {
-    select: {
-      id: true,
-      messageId: true,
-      sender: true,
-      readAt: true
-    },
-    orderBy: {
-      readAt: "asc"
-    }
-  }
-} as const;
 
 type RouteContext = {
   params: Promise<{
@@ -76,8 +50,8 @@ export async function POST(request: Request, context: RouteContext) {
     include: messageInclude
   });
 
-  void deleteBlobUrls(getMessageBlobUrls(existing));
-  void notifyMessagesChanged({ type: "recalled", id: message.id });
+  after(deleteBlobUrls(getMessageBlobUrls(existing)));
+  after(notifyMessagesChanged({ type: "recalled", id: message.id, message: serializeMessage(message) }));
 
   return NextResponse.json({ message });
 }

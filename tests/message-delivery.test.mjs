@@ -1,0 +1,262 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { runInThisContext } from "node:vm";
+import ts from "typescript";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const nativeRequire = createRequire(import.meta.url);
+
+// Exercise the actual TypeScript modules with isolated database and network mocks.
+function loadModule(relativePath, mocks = {}, cache = new Map()) {
+  const filename = resolve(root, relativePath);
+  if (cache.has(filename)) return cache.get(filename);
+  const loadedModule = { exports: {} };
+  cache.set(filename, loadedModule.exports);
+  const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true }
+  });
+  const requireModule = (specifier) => {
+    if (Object.hasOwn(mocks, specifier)) return mocks[specifier];
+    if (specifier.startsWith("@/")) return loadModule(`${specifier.slice(2)}.ts`, mocks, cache);
+    return nativeRequire(specifier);
+  };
+  runInThisContext(`(function(require, module, exports) {\n${outputText}\n})`, { filename })(
+    requireModule, loadedModule, loadedModule.exports
+  );
+  return loadedModule.exports;
+}
+
+function storedMessage(overrides = {}) {
+  return {
+    id: "cm000000000000000000000001", sender: "CHEN", text: "hello", imageUrl: null,
+    imageUrls: [], thumbnailUrls: [], createdAt: new Date("2026-10-02T00:00:00Z"),
+    updatedAt: new Date("2026-10-02T00:00:00Z"), editedAt: null, recalledAt: null,
+    readAt: null, replyToMessageId: null, reads: [], replyTo: null, ...overrides
+  };
+}
+
+function request(body) {
+  return new Request("http://localhost/api/messages", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+}
+
+function routeHarness({ membersExist = true, replies = [], realtimeAvailable = true, notify = async () => {} } = {}) {
+  const events = [];
+  const afterTasks = [];
+  const creates = [];
+  const validations = [];
+  const route = loadModule("app/api/messages/route.ts", {
+    "next/server": { NextResponse: { json: (body, options) => Response.json(body, options) }, after: (task) => afterTasks.push(task) },
+    "@/lib/prisma": { prisma: {
+      member: { count: async ({ where }) => { validations.push(where); return membersExist ? where.id.in.length : 0; } },
+      message: {
+        findMany: async ({ select }) => select ? replies.map((reply) =>
+          Object.fromEntries(Object.keys(select).map((key) => [key, reply[key]]))
+        ) : [],
+        create: async (args) => {
+          creates.push(args);
+          return storedMessage({ ...args.data, id: `cm${String(creates.length).padStart(23, "0")}` });
+        }
+      },
+      $transaction: async (operations) => Promise.all(operations)
+    } },
+    "@/lib/pusher-server": {
+      hasRealtimeMessaging: () => realtimeAvailable,
+      notifyMessagesChanged: (event) => { events.push(event); return notify(event); }
+    }
+  });
+  return { route, events, afterTasks, creates, validations };
+}
+
+test("send publishes the saved message immediately without waiting for Pusher or querying its empty relations", async () => {
+  let finishNotification;
+  const notification = new Promise((resolveNotification) => { finishNotification = resolveNotification; });
+  const harness = routeHarness({ notify: () => notification });
+  const response = await harness.route.POST(request({ sender: "CHEN", text: "hello", clientRequestId: "optimistic-test" }));
+  const { message } = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(harness.events.length, 1);
+  assert.deepEqual(harness.events[0].message, message);
+  assert.equal(harness.events[0].clientRequestId, "optimistic-test");
+  assert.equal("include" in harness.creates[0], false);
+  assert.equal(harness.afterTasks.length, 1);
+  let notificationFinished = false;
+  harness.afterTasks[0].then(() => { notificationFinished = true; });
+  await Promise.resolve();
+  assert.equal(notificationFinished, false);
+  finishNotification();
+  await harness.afterTasks[0];
+});
+
+test("a batch publishes every saved message with its own client request ID", async () => {
+  const harness = routeHarness();
+  const response = await harness.route.POST(request({ messages: [
+    { sender: "CHEN", text: "one", clientRequestId: "optimistic-one" },
+    { sender: "ZUO", text: "two", clientRequestId: "optimistic-two" }
+  ] }));
+  assert.equal(response.status, 201);
+  const { messages } = await response.json();
+  assert.deepEqual(harness.events.map((event) => event.message), messages);
+  assert.deepEqual(harness.events.map((event) => event.clientRequestId), ["optimistic-one", "optimistic-two"]);
+  await Promise.all(harness.afterTasks);
+});
+
+test("unknown senders and missing replies cannot create or broadcast messages", async () => {
+  for (const options of [{ membersExist: false }, { replies: [] }]) {
+    const harness = routeHarness(options);
+    const body = { sender: "CHEN", text: "hello" };
+    if (options.replies) body.replyToMessageId = "cm000000000000000000000099";
+    const response = await harness.route.POST(request(body));
+    assert.equal(response.status, 400);
+    assert.equal(harness.creates.length, 0);
+    assert.equal(harness.events.length, 0);
+  }
+});
+
+test("reply and image data are included in the direct delivery", async () => {
+  const reply = storedMessage({ id: "cm000000000000000000000099", sender: "ZUO", text: "question" });
+  const harness = routeHarness({ replies: [reply] });
+  const imageUrl = "https://example.com/image.jpg";
+  const response = await harness.route.POST(request({
+    sender: "CHEN", text: "answer", replyToMessageId: reply.id, imageUrls: [imageUrl], thumbnailUrls: [imageUrl]
+  }));
+  assert.equal(response.status, 201);
+  const { message } = await response.json();
+  assert.equal(message.replyTo.text, "question");
+  assert.equal(message.replyTo.createdAt, reply.createdAt.toISOString());
+  assert.deepEqual(message.imageUrls, [imageUrl]);
+  assert.deepEqual(harness.events[0].message, message);
+  await Promise.all(harness.afterTasks);
+});
+
+test("UTF-8 messages over Pusher's size limit retain their ID for targeted retrieval", async () => {
+  const events = [];
+  const env = { PUSHER_APP_ID: "test", NEXT_PUBLIC_PUSHER_KEY: "test", PUSHER_SECRET: "test", PUSHER_CLUSTER: "ap3" };
+  const originalEnv = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    const server = loadModule("lib/pusher-server.ts", {
+      pusher: class { async trigger(_channel, _name, event) { events.push(event); } }
+    });
+    const { serializeMessage } = loadModule("lib/message-data.ts");
+    const short = serializeMessage(storedMessage());
+    await server.notifyMessagesChanged({ type: "created", id: short.id, message: short });
+    const large = serializeMessage(storedMessage({ text: "\u4e2d".repeat(4000) }));
+    await server.notifyMessagesChanged({ type: "created", id: large.id, message: large, clientRequestId: "optimistic-large" });
+    assert.deepEqual(events[0].message, short);
+    assert.equal(events[1].message, undefined);
+    assert.equal(events[1].id, large.id);
+    assert.equal(events[1].clientRequestId, "optimistic-large");
+    assert.ok(Buffer.byteLength(JSON.stringify(events[1])) < 10000);
+  } finally {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+const { serializeMessage } = loadModule("lib/message-data.ts");
+const { mergeLoadedMessages, applyReadReceipts } = loadModule("lib/message-state.ts");
+
+test("WebSocket delivery before the POST response replaces the optimistic message without duplicates or losing reads", () => {
+  const saved = serializeMessage(storedMessage());
+  const optimistic = { ...saved, id: "optimistic-test", clientStatus: "sending" };
+  let messages = mergeLoadedMessages([optimistic], [saved], optimistic.id);
+  messages = applyReadReceipts(messages, [saved.id], "ZUO", "2026-10-02T00:00:01Z");
+  messages = mergeLoadedMessages(messages, [saved], optimistic.id);
+  messages = mergeLoadedMessages(messages, [saved]);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].clientStatus, undefined);
+  assert.equal(messages[0].reads[0].sender, "ZUO");
+});
+
+test("a delayed history response cannot undo a newer recall or edit", () => {
+  const original = serializeMessage(storedMessage());
+  for (const update of [
+    { text: "edited", editedAt: new Date("2026-10-02T00:00:02Z") },
+    { text: null, recalledAt: new Date("2026-10-02T00:00:02Z") }
+  ]) {
+    const changed = serializeMessage(storedMessage({ ...update, updatedAt: new Date("2026-10-02T00:00:02Z") }));
+    const messages = mergeLoadedMessages([changed], [original]);
+    assert.equal(messages[0].text, changed.text);
+    assert.equal(messages[0].recalledAt, changed.recalledAt);
+  }
+});
+
+test("read receipts apply only to the supplied messages and deduplicate repeated events", () => {
+  const first = serializeMessage(storedMessage());
+  const second = serializeMessage(storedMessage({ id: "cm000000000000000000000002" }));
+  const readAt = "2026-10-02T00:00:01Z";
+  let messages = applyReadReceipts([first, second], [first.id], "ZUO", readAt);
+  messages = applyReadReceipts(messages, [first.id], "ZUO", readAt);
+  assert.equal(messages[0].reads.length, 1);
+  assert.equal(messages[1].reads.length, 0);
+});
+
+test("history reports missing server realtime configuration so a connected client can use fast fallback polling", async () => {
+  const harness = routeHarness({ realtimeAvailable: false });
+  const response = await harness.route.GET(new Request("http://localhost/api/messages?limit=40"));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).realtimeAvailable, false);
+});
+
+test("direct edit and recall delivery updates existing reply previews", () => {
+  const original = serializeMessage(storedMessage());
+  const reply = serializeMessage(storedMessage({
+    id: "cm000000000000000000000002", replyToMessageId: original.id,
+    replyTo: storedMessage(), createdAt: new Date("2026-10-02T00:00:01Z")
+  }));
+  const recalled = serializeMessage(storedMessage({
+    text: null, recalledAt: new Date("2026-10-02T00:00:02Z"), updatedAt: new Date("2026-10-02T00:00:02Z")
+  }));
+  const messages = mergeLoadedMessages([original, reply], [recalled]);
+  assert.equal(messages[1].replyTo.text, null);
+  assert.equal(messages[1].replyTo.recalledAt, recalled.recalledAt);
+});
+
+test("large read batches publish small receipt events without delaying the response", async () => {
+  const events = [];
+  const tasks = [];
+  const messageIds = Array.from({ length: 500 }, (_, index) => `cm${String(index).padStart(23, "0")}`);
+  let finishNotifications;
+  const notification = new Promise((finish) => { finishNotifications = finish; });
+  const route = loadModule("app/api/messages/read/route.ts", {
+    "next/server": { NextResponse: { json: (body, options) => Response.json(body, options) }, after: (task) => tasks.push(task) },
+    "@/lib/members": { memberExists: async () => true },
+    "@/lib/prisma": { prisma: {
+      message: { findMany: async () => messageIds.map((id) => ({ id })), updateMany: async () => ({ count: 500 }) },
+      messageRead: { createMany: async () => ({ count: 500 }) }
+    } },
+    "@/lib/pusher-server": { notifyMessagesChanged: (event) => { events.push(event); return notification; } }
+  });
+  const response = await route.POST(request({ sender: "ZUO", messageIds }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).marked, 500);
+  assert.equal(events.length, 5);
+  assert.deepEqual(events.flatMap((event) => event.messageIds), messageIds);
+  assert.ok(events.every((event) => Buffer.byteLength(JSON.stringify(event)) < 9500));
+  finishNotifications();
+  await Promise.all(tasks);
+});
+
+test("targeted retrieval returns the full message and a 404 for missing IDs", async () => {
+  let message = storedMessage();
+  const route = loadModule("app/api/messages/[id]/route.ts", {
+    "@/lib/prisma": { prisma: { message: { findUnique: async () => message } } },
+    "@/lib/blob-storage": {},
+    "@/lib/pusher-server": {}
+  });
+  const context = { params: Promise.resolve({ id: message.id }) };
+  const found = await route.GET(new Request("http://localhost/api/messages/example"), context);
+  assert.equal(found.status, 200);
+  assert.deepEqual((await found.json()).message, serializeMessage(message));
+  message = null;
+  const missing = await route.GET(new Request("http://localhost/api/messages/example"), context);
+  assert.equal(missing.status, 404);
+});
