@@ -260,3 +260,48 @@ test("targeted retrieval returns the full message and a 404 for missing IDs", as
   const missing = await route.GET(new Request("http://localhost/api/messages/example"), context);
   assert.equal(missing.status, 404);
 });
+
+const { buildMessageLayout, buildVirtualMetrics, getMessagesBelowViewport, shouldFollowLatest } = loadModule("lib/chat-scroll.ts");
+
+test("auto-follow stops at six messages, regardless of individual message heights", () => {
+  const messages = Array.from({ length: 12 }, (_, index) => serializeMessage(storedMessage({ id: `message-${index}` })));
+  const heights = new Map(messages.map((message, index) => [message.id, index % 2 === 0 ? 40 : 320]));
+  const layout = buildMessageLayout(messages, heights);
+  assert.equal(getMessagesBelowViewport(layout, layout.offsets[6]), 6);
+  assert.equal(shouldFollowLatest(layout, layout.offsets[6]), false);
+  assert.equal(shouldFollowLatest(layout, layout.offsets[7]), true);
+  assert.equal(shouldFollowLatest(layout, layout.totalHeight + 20), true);
+});
+
+test("initial virtual rendering includes the newest message before scrolling", () => {
+  const messages = Array.from({ length: 100 }, (_, index) => serializeMessage(storedMessage({ id: `message-${index}` })));
+  const layout = buildMessageLayout(messages, new Map());
+  const metrics = buildVirtualMetrics(messages, layout, { scrollTop: 0, height: 600 }, true);
+  assert.equal(metrics.rows.at(-1).message.id, messages.at(-1).id);
+  assert.ok(metrics.topSpacerHeight > 0);
+  assert.equal(metrics.bottomSpacerHeight, 0);
+  assert.equal(metrics.rows.length < messages.length, true);
+});
+
+test("virtual windows preserve the complete scroll height and handle an empty room", () => {
+  const messages = Array.from({ length: 100 }, (_, index) => serializeMessage(storedMessage({ id: `message-${index}` })));
+  const layout = buildMessageLayout(messages, new Map());
+  const metrics = buildVirtualMetrics(messages, layout, { scrollTop: 4500, height: 600 });
+  const renderedHeight = metrics.rows.reduce((sum, row) => sum + layout.heights[row.index], 0);
+  assert.equal(metrics.topSpacerHeight + renderedHeight + metrics.bottomSpacerHeight, layout.totalHeight);
+  const emptyLayout = buildMessageLayout([], new Map());
+  assert.equal(buildVirtualMetrics([], emptyLayout, { scrollTop: 0, height: 600 }).rows.length, 0);
+  assert.equal(getMessagesBelowViewport(emptyLayout, 600), 0);
+});
+
+test("unchanged polling preserves the history and message references", () => {
+  const original = serializeMessage(storedMessage());
+  const reply = serializeMessage(storedMessage({
+    id: "cm000000000000000000000002", replyToMessageId: original.id, replyTo: storedMessage()
+  }));
+  const current = [original, reply];
+  const loaded = JSON.parse(JSON.stringify(current));
+  assert.equal(mergeLoadedMessages(current, loaded), current);
+  const edited = { ...loaded[0], text: "changed", updatedAt: "2026-10-02T00:00:02Z" };
+  assert.notEqual(mergeLoadedMessages(current, [edited]), current);
+});

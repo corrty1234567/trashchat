@@ -31,6 +31,13 @@ export function HomeClient() {
 
   useEffect(() => {
     let isMounted = true;
+    const savedSender = window.localStorage.getItem(STORAGE_KEY);
+
+    // Protected identities can open chat while the member list loads in parallel.
+    if (!isSender(savedSender) || hasMember(DEFAULT_MEMBER_LIST, savedSender)) {
+      setSender(isSender(savedSender) ? savedSender : null);
+      setIsHydrated(true);
+    }
 
     async function init() {
       let loadedMembers = DEFAULT_MEMBER_LIST;
@@ -45,12 +52,13 @@ export function HomeClient() {
         return;
       }
 
-      const savedSender = window.localStorage.getItem(STORAGE_KEY);
+      const activeSavedSender = window.localStorage.getItem(STORAGE_KEY);
       setMembers(loadedMembers);
 
-      if (isSender(savedSender) && hasMember(loadedMembers, savedSender)) {
-        setSender(savedSender);
+      if (isSender(activeSavedSender) && hasMember(loadedMembers, activeSavedSender)) {
+        setSender(activeSavedSender);
       } else {
+        setSender(null);
         window.localStorage.removeItem(STORAGE_KEY);
       }
 

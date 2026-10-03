@@ -21,6 +21,32 @@ export function toReplyMessage(message: Message): Message["replyTo"] {
   };
 }
 
+function sameUrls(first: readonly string[], second: readonly string[]) {
+  return first.length === second.length && first.every((url, index) => url === second[index]);
+}
+
+function sameReply(first: Message["replyTo"], second: Message["replyTo"]) {
+  if (first === second) return true;
+  if (!first || !second) return !first && !second;
+  return first.id === second.id && first.sender === second.sender && first.text === second.text &&
+    first.createdAt === second.createdAt && first.editedAt === second.editedAt && first.recalledAt === second.recalledAt &&
+    first.imageUrl === second.imageUrl && sameUrls(first.imageUrls ?? [], second.imageUrls ?? []) &&
+    sameUrls(first.thumbnailUrls ?? [], second.thumbnailUrls ?? []);
+}
+
+function sameMessage(first: Message, second: Message) {
+  return first.id === second.id && first.sender === second.sender && first.text === second.text &&
+    first.createdAt === second.createdAt && first.updatedAt === second.updatedAt && first.editedAt === second.editedAt &&
+    first.recalledAt === second.recalledAt && first.readAt === second.readAt && first.clientStatus === second.clientStatus &&
+    first.replyToMessageId === second.replyToMessageId && sameReply(first.replyTo, second.replyTo) &&
+    first.imageUrl === second.imageUrl && sameUrls(first.imageUrls ?? [], second.imageUrls ?? []) &&
+    sameUrls(first.thumbnailUrls ?? [], second.thumbnailUrls ?? []) && first.reads.length === second.reads.length &&
+    first.reads.every((read, index) => {
+      const other = second.reads[index];
+      return read.id === other.id && read.sender === other.sender && read.readAt === other.readAt;
+    });
+}
+
 export function mergeLoadedMessages(currentMessages: Message[], loadedMessages: Message[], optimisticId?: string) {
   const messagesById = new Map(
     currentMessages.filter((message) => message.id !== optimisticId).map((message) => [message.id, message])
@@ -38,11 +64,12 @@ export function mergeLoadedMessages(currentMessages: Message[], loadedMessages: 
     const newest = Date.parse(current.updatedAt) > Date.parse(message.updatedAt) ? current : message;
     const readsBySender = new Map((current.reads ?? []).map((read) => [read.sender, read]));
     (message.reads ?? []).forEach((read) => readsBySender.set(read.sender, read));
-    messagesById.set(message.id, {
+    const merged = {
       ...newest,
       readAt: newest.readAt ?? current.readAt ?? message.readAt,
       reads: [...readsBySender.values()]
-    });
+    };
+    messagesById.set(message.id, sameMessage(current, merged) ? current : merged);
   });
 
   const messages = [...messagesById.values()].map((message) => {
@@ -52,10 +79,16 @@ export function mergeLoadedMessages(currentMessages: Message[], loadedMessages: 
       ? Math.max(Date.parse(reply.createdAt), Date.parse(reply.editedAt ?? reply.createdAt), Date.parse(reply.recalledAt ?? reply.createdAt))
       : 0;
 
-    return target && Date.parse(target.updatedAt) >= replyChangedAt
-      ? { ...message, replyTo: toReplyMessage(target) }
-      : message;
+    if (target && Date.parse(target.updatedAt) >= replyChangedAt) {
+      const replyTo = toReplyMessage(target);
+      if (!sameReply(reply, replyTo)) return { ...message, replyTo };
+    }
+    return message;
   });
+  // Unchanged health checks should not rerender or remeasure the entire history.
+  if (messages.length === currentMessages.length && messages.every((message, index) => message === currentMessages[index])) {
+    return currentMessages;
+  }
   return sortMessagesByCreatedAt(messages);
 }
 

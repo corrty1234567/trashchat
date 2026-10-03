@@ -1,7 +1,7 @@
 "use client";
 
 import Pusher from "pusher-js";
-import { ArrowLeft, RefreshCw, Search, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, RefreshCw, Search, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AdminSnakeGate } from "@/components/admin-snake-gate";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
@@ -10,6 +10,7 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { MemberAdminPanel } from "@/components/member-admin-panel";
 import { MessageBubble } from "@/components/message-bubble";
 import { VoiceCall } from "@/components/voice-call";
+import { AUTO_FOLLOW_MESSAGE_LIMIT, buildMessageLayout, buildVirtualMetrics, getEstimatedMessageHeight, getMessagesBelowViewport, shouldFollowLatest, type MessageLayout, type VirtualViewport } from "@/lib/chat-scroll";
 import { mentionsSender } from "@/lib/mentions";
 import { applyReadReceipts, mergeLoadedMessages, sortMessagesByCreatedAt, toReplyMessage } from "@/lib/message-state";
 import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED, type MessageChangedEvent } from "@/lib/realtime";
@@ -33,8 +34,6 @@ const MESSAGE_BACKGROUND_POLLING_INTERVAL_MS = 60000;
 const INITIAL_MESSAGE_LIMIT = 40;
 const OLDER_MESSAGE_LIMIT = 60;
 const MESSAGE_LOAD_TOP_OFFSET_PX = 220;
-const VIRTUAL_OVERSCAN_PX = 900;
-const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 260;
 const MAX_SERVER_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1800;
 const THUMBNAIL_MAX_DIMENSION = 420;
@@ -47,11 +46,6 @@ const TYPING_EXPIRE_MS = 3200;
 type TitleLetter = {
   id: string;
   value: string;
-};
-
-type VirtualViewport = {
-  scrollTop: number;
-  height: number;
 };
 
 function createTitleLetters() {
@@ -89,93 +83,6 @@ function getReadByLabels(message: Message, currentSender: Sender, members: reado
   );
 
   return [...readSenders].map((readSender) => getSenderLabel(readSender, members));
-}
-
-function getEstimatedMessageHeight(message: Message) {
-  let height = 72;
-
-  if (message.replyTo && !message.recalledAt) {
-    height += 52;
-  }
-
-  if (message.recalledAt) {
-    height += 34;
-  } else {
-    if (message.text?.trim()) {
-      height += Math.min(180, Math.ceil(message.text.trim().length / 42) * 22);
-    }
-
-    if ((message.imageUrls?.length ?? 0) > 0 || message.imageUrl) {
-      height += 276;
-    }
-  }
-
-  if ((message.reads?.length ?? 0) > 0) {
-    height += 20;
-  }
-
-  return height + 16;
-}
-
-function getMeasuredMessageHeight(message: Message, heights: ReadonlyMap<string, number>) {
-  return heights.get(message.id) ?? getEstimatedMessageHeight(message);
-}
-
-function getIsNearBottom(container: HTMLElement) {
-  return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-function buildVirtualMetrics(messages: Message[], heights: ReadonlyMap<string, number>, viewport: VirtualViewport) {
-  const itemHeights: number[] = [];
-  const offsets: number[] = [];
-  let totalHeight = 0;
-
-  messages.forEach((message) => {
-    offsets.push(totalHeight);
-    const height = getMeasuredMessageHeight(message, heights);
-    itemHeights.push(height);
-    totalHeight += height;
-  });
-
-  if (messages.length === 0) {
-    return {
-      rows: [] as Array<{ message: Message; index: number }>,
-      offsets,
-      totalHeight,
-      topSpacerHeight: 0,
-      bottomSpacerHeight: 0
-    };
-  }
-
-  const viewportHeight = viewport.height || 720;
-  const startBoundary = Math.max(0, viewport.scrollTop - VIRTUAL_OVERSCAN_PX);
-  const endBoundary = viewport.scrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX;
-  let startIndex = 0;
-
-  while (startIndex < messages.length - 1 && offsets[startIndex] + itemHeights[startIndex] < startBoundary) {
-    startIndex += 1;
-  }
-
-  let endIndex = startIndex;
-
-  while (endIndex < messages.length - 1 && offsets[endIndex] <= endBoundary) {
-    endIndex += 1;
-  }
-
-  const rows = messages.slice(startIndex, endIndex + 1).map((message, rowOffset) => ({
-    message,
-    index: startIndex + rowOffset
-  }));
-  const topSpacerHeight = offsets[startIndex] ?? 0;
-  const afterVisibleOffset = offsets[endIndex + 1] ?? totalHeight;
-
-  return {
-    rows,
-    offsets,
-    totalHeight,
-    topSpacerHeight,
-    bottomSpacerHeight: Math.max(0, totalHeight - afterVisibleOffset)
-  };
 }
 
 function getMessagePageUrl(limit: number, beforeMessage?: Message) {
@@ -362,17 +269,26 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [searchError, setSearchError] = useState<string | null>(null);
   const [typingSender, setTypingSender] = useState<Sender | null>(null);
   const [isPageActive, setIsPageActive] = useState(true);
+  const [hasPositionedInitialMessages, setHasPositionedInitialMessages] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [virtualViewport, setVirtualViewport] = useState<VirtualViewport>({ scrollTop: 0, height: 0 });
   const [messageHeights, setMessageHeights] = useState<ReadonlyMap<string, number>>(() => new Map());
   const scrollContainerRef = useRef<HTMLElement | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const loadMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
   const loadOlderMessagesPromiseRef = useRef<Promise<{ messages: Message[]; hasMore: boolean }> | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const messageHeightsRef = useRef<Map<string, number>>(new Map());
+  const pendingMessageHeightsRef = useRef(new Map<string, number>());
+  const measurementFrameRef = useRef<number | null>(null);
+  const messageLayoutRef = useRef<MessageLayout>({ offsets: [], heights: [], totalHeight: 0 });
+  const pendingScrollAdjustmentRef = useRef(0);
+  const userScrollUntilRef = useRef(0);
   const draggedTitleIndexRef = useRef<number | null>(null);
   const hasMoreOlderMessagesRef = useRef(true);
   const shouldStickToBottomRef = useRef(true);
+  const isPinnedToBottomRef = useRef(true);
+  const previousLatestMessageIdRef = useRef<string | null>(null);
   const hasCompletedInitialBottomScrollRef = useRef(false);
   const pendingFocusMessageIdRef = useRef<string | null>(null);
   const optimisticImageUrlsRef = useRef<Map<string, string>>(new Map());
@@ -384,7 +300,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const pendingReadMessageIdsRef = useRef(new Set<string>());
   const hasSentTypingRef = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
@@ -395,10 +311,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       return;
     }
 
-    shouldStickToBottomRef.current = getIsNearBottom(container);
     setVirtualViewport((currentViewport) => {
       const nextViewport = {
-        scrollTop: container.scrollTop,
+        scrollTop: container.scrollTop - (messageListRef.current?.offsetTop ?? 0),
         height: container.clientHeight
       };
 
@@ -418,46 +333,69 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       return;
     }
 
-    const currentMessages = messagesRef.current;
-    const messageIndex = currentMessages.findIndex((message) => message.id === messageId);
-    const previousHeight =
-      messageHeightsRef.current.get(messageId) ??
-      (messageIndex >= 0 ? getEstimatedMessageHeight(currentMessages[messageIndex]) : nextHeight);
-    const heightDelta = nextHeight - previousHeight;
-
-    if (Math.abs(heightDelta) < 1) {
+    if (messageHeightsRef.current.get(messageId) === nextHeight) {
       return;
     }
 
-    const container = scrollContainerRef.current;
-
-    if (container && messageIndex >= 0) {
-      let messageOffset = 0;
-
-      for (let index = 0; index < messageIndex; index += 1) {
-        const message = currentMessages[index];
-        messageOffset += getMeasuredMessageHeight(message, messageHeightsRef.current);
-      }
-
-      if (messageOffset < container.scrollTop) {
-        container.scrollTop += heightDelta;
-      }
+    pendingMessageHeightsRef.current.set(messageId, nextHeight);
+    if (measurementFrameRef.current !== null) {
+      return;
     }
 
-    messageHeightsRef.current.set(messageId, nextHeight);
-    setMessageHeights(new Map(messageHeightsRef.current));
-    syncVirtualViewport();
-  }, [syncVirtualViewport]);
+    // Apply all row measurements together instead of rebuilding the list for each row.
+    measurementFrameRef.current = window.requestAnimationFrame(() => {
+      measurementFrameRef.current = null;
+      const currentMessages = messagesRef.current;
+      const indexById = new Map(currentMessages.map((message, index) => [message.id, index]));
+      const container = scrollContainerRef.current;
+      const viewportTop = container ? container.scrollTop - (messageListRef.current?.offsetTop ?? 0) : 0;
+      let hasChanges = false;
+
+      pendingMessageHeightsRef.current.forEach((height, id) => {
+        const index = indexById.get(id);
+        if (index === undefined) return;
+        const previousHeight = messageHeightsRef.current.get(id) ?? getEstimatedMessageHeight(currentMessages[index]);
+        if (!isPinnedToBottomRef.current && (messageLayoutRef.current.offsets[index] ?? 0) < viewportTop) {
+          pendingScrollAdjustmentRef.current += height - previousHeight;
+        }
+        messageHeightsRef.current.set(id, height);
+        hasChanges = true;
+      });
+      pendingMessageHeightsRef.current.clear();
+      if (hasChanges) setMessageHeights(new Map(messageHeightsRef.current));
+    });
+  }, []);
+
+  const messageLayout = useMemo(() => buildMessageLayout(messages, messageHeights), [messages, messageHeights]);
+
+  useLayoutEffect(() => {
+    messageLayoutRef.current = messageLayout;
+  }, [messageLayout]);
 
   const virtualMetrics = useMemo(
-    () => buildVirtualMetrics(messages, messageHeights, virtualViewport),
-    [messageHeights, messages, virtualViewport]
+    () => buildVirtualMetrics(messages, messageLayout, virtualViewport, !hasPositionedInitialMessages || isAtBottom),
+    [hasPositionedInitialMessages, isAtBottom, messageLayout, messages, virtualViewport]
   );
 
   const messageIndexById = useMemo(
     () => new Map(messages.map((message, index) => [message.id, index])),
     [messages]
   );
+
+  const scrollToLatest = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    shouldStickToBottomRef.current = true;
+    isPinnedToBottomRef.current = true;
+    userScrollUntilRef.current = 0;
+    container.scrollTop = container.scrollHeight;
+    setIsAtBottom(true);
+    syncVirtualViewport();
+  }, [syncVirtualViewport]);
+
+  const handleScrollIntent = useCallback(() => {
+    userScrollUntilRef.current = performance.now() + 200;
+  }, []);
 
   useLayoutEffect(() => {
     syncVirtualViewport();
@@ -501,7 +439,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
       const data = (await response.json()) as { messages: Message[]; hasMore: boolean; realtimeAvailable?: boolean };
       serverRealtimeAvailableRef.current = data.realtimeAvailable !== false;
-      hasMoreOlderMessagesRef.current = data.hasMore || hasMoreOlderMessagesRef.current;
+      if (!hasCompletedInitialBottomScrollRef.current) hasMoreOlderMessagesRef.current = data.hasMore;
       mergeMessagesIntoState(data.messages);
       return data;
     })();
@@ -597,10 +535,20 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const handleMessageScroll = useCallback(() => {
     const container = scrollContainerRef.current;
 
+    if (container && hasCompletedInitialBottomScrollRef.current && performance.now() < userScrollUntilRef.current) {
+      userScrollUntilRef.current = performance.now() + 200;
+      const viewportBottom = container.scrollTop + container.clientHeight - (messageListRef.current?.offsetTop ?? 0);
+      shouldStickToBottomRef.current = shouldFollowLatest(messageLayoutRef.current, viewportBottom);
+      const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 4;
+      isPinnedToBottomRef.current = atBottom;
+      setIsAtBottom(atBottom);
+    }
     syncVirtualViewport();
 
     if (
       !container ||
+      !hasCompletedInitialBottomScrollRef.current ||
+      isPinnedToBottomRef.current ||
       container.scrollTop > MESSAGE_LOAD_TOP_OFFSET_PX ||
       !hasMoreOlderMessagesRef.current ||
       loadOlderMessagesPromiseRef.current
@@ -803,6 +751,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     return () => {
       const typingStopTimer = typingStopTimerRef.current;
       const otherTypingTimer = otherTypingTimerRef.current;
+      const measurementFrame = measurementFrameRef.current;
 
       if (typingStopTimer) {
         window.clearTimeout(typingStopTimer);
@@ -810,32 +759,31 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       if (otherTypingTimer) {
         window.clearTimeout(otherTypingTimer);
       }
+      if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame);
     };
   }, []);
 
-  const latestMessage = messages[messages.length - 1] ?? null;
-  const latestMessageId = latestMessage?.id ?? null;
+  const latestMessageId = messages[messages.length - 1]?.id ?? null;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isLoading || !latestMessageId) {
       return;
     }
 
-    const shouldScrollToBottom =
-      !hasCompletedInitialBottomScrollRef.current || shouldStickToBottomRef.current || latestMessage?.sender === sender;
-
-    if (!shouldScrollToBottom) {
-      return;
-    }
-
-    const behavior: ScrollBehavior = hasCompletedInitialBottomScrollRef.current ? "smooth" : "auto";
+    const isInitialPosition = !hasCompletedInitialBottomScrollRef.current;
+    const hasNewLatestMessage = previousLatestMessageIdRef.current !== latestMessageId;
+    previousLatestMessageIdRef.current = latestMessageId;
     hasCompletedInitialBottomScrollRef.current = true;
 
-    window.requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    if (isInitialPosition || isPinnedToBottomRef.current || (hasNewLatestMessage && shouldStickToBottomRef.current)) {
+      scrollToLatest();
+    } else if (pendingScrollAdjustmentRef.current && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop += pendingScrollAdjustmentRef.current;
       syncVirtualViewport();
-    });
-  }, [isLoading, latestMessage?.sender, latestMessageId, sender, syncVirtualViewport]);
+    }
+    pendingScrollAdjustmentRef.current = 0;
+    if (isInitialPosition) setHasPositionedInitialMessages(true);
+  }, [isLoading, latestMessageId, messageLayout, scrollToLatest, syncVirtualViewport, virtualMetrics, virtualViewport.height]);
 
   useEffect(() => {
     function syncPageActiveState() {
@@ -866,6 +814,20 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
   const unreadIncomingMessages = useMemo(() => getUnreadIncomingMessages(messages, sender), [messages, sender]);
 
+  const readableUnreadMessages = useMemo(() => {
+    if (!hasPositionedInitialMessages || virtualViewport.height <= 0) return [];
+    const viewportBottom = virtualViewport.scrollTop + virtualViewport.height;
+    return unreadIncomingMessages.filter((message) => {
+      const index = messageIndexById.get(message.id);
+      return index !== undefined && messageLayout.offsets[index] < viewportBottom;
+    });
+  }, [hasPositionedInitialMessages, messageIndexById, messageLayout, unreadIncomingMessages, virtualViewport]);
+
+  const unreadBelowCount = unreadIncomingMessages.length - readableUnreadMessages.length;
+  const messagesBelowCount = getMessagesBelowViewport(messageLayout, virtualViewport.scrollTop + virtualViewport.height);
+  const showJumpToLatest = hasPositionedInitialMessages && !isAtBottom &&
+    (unreadBelowCount > 0 || messagesBelowCount >= AUTO_FOLLOW_MESSAGE_LIMIT);
+
   const unreadMentionSender = useMemo(() => {
     for (let index = unreadIncomingMessages.length - 1; index >= 0; index -= 1) {
       const message = unreadIncomingMessages[index];
@@ -879,12 +841,12 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   }, [members, sender, unreadIncomingMessages]);
 
   useEffect(() => {
-    if (!isPageActive || unreadIncomingMessages.length === 0) {
+    if (!isPageActive || readableUnreadMessages.length === 0) {
       return;
     }
 
     const readAt = new Date().toISOString();
-    const unreadMessageIds = unreadIncomingMessages.map((message) => message.id);
+    const unreadMessageIds = readableUnreadMessages.map((message) => message.id);
     unreadMessageIds.forEach((id) => pendingReadMessageIdsRef.current.add(id));
 
     setMessages((currentMessages) => applyReadReceipts(currentMessages, unreadMessageIds, sender, readAt));
@@ -916,10 +878,13 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       .finally(() => {
         readSyncRef.current = false;
       });
-  }, [isPageActive, sender, unreadIncomingMessages]);
+  }, [isPageActive, readableUnreadMessages, sender]);
 
   const focusMessage = useCallback(
     (messageId: string) => {
+      shouldStickToBottomRef.current = false;
+      isPinnedToBottomRef.current = false;
+      setIsAtBottom(false);
       const messageElement = document.getElementById(`message-${messageId}`);
 
       if (messageElement) {
@@ -932,7 +897,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         const messageIndex = messageIndexById.get(messageId);
 
         if (container && messageIndex !== undefined) {
-          const estimatedOffset = virtualMetrics.offsets[messageIndex] ?? 0;
+          const estimatedOffset = (messageLayout.offsets[messageIndex] ?? 0) + (messageListRef.current?.offsetTop ?? 0);
           container.scrollTo({
             top: Math.max(0, estimatedOffset - container.clientHeight / 2),
             behavior: "smooth"
@@ -949,7 +914,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       setHighlightedId(messageId);
       window.setTimeout(() => setHighlightedId((current) => (current === messageId ? null : current)), 1400);
     },
-    [messageIndexById, virtualMetrics.offsets]
+    [messageIndexById, messageLayout.offsets]
   );
 
   useEffect(() => {
@@ -1452,72 +1417,100 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         ) : null}
       </header>
 
-      <section
-        ref={scrollContainerRef}
-        onScroll={handleMessageScroll}
-        style={{ overflowAnchor: "none" }}
-        className="chat-scrollbar mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-y-auto px-3 py-5 sm:px-5"
-      >
-        {isLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-brand" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center text-center text-sm leading-7 text-slate-500">
-            還沒有訊息。傳送第一則文字或圖片開始對話。
-          </div>
-        ) : (
-          <>
-            {isLoadingOlder ? (
-              <div className="flex justify-center py-1">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-line border-t-brand" />
-              </div>
-            ) : null}
-            {virtualMetrics.topSpacerHeight > 0 ? (
-              <div aria-hidden="true" className="shrink-0" style={{ height: virtualMetrics.topSpacerHeight }} />
-            ) : null}
-            {virtualMetrics.rows.map(({ message, index }) => {
-              const previousMessage = messages[index - 1];
-              const showTimestamp =
-                !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
+      <div className="relative min-h-0 flex-1">
+        <section
+          ref={scrollContainerRef}
+          onScroll={handleMessageScroll}
+          onWheel={handleScrollIntent}
+          onTouchMove={handleScrollIntent}
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) handleScrollIntent();
+          }}
+          onKeyDown={(event) => {
+            if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) handleScrollIntent();
+          }}
+          tabIndex={0}
+          aria-label="聊天訊息"
+          style={{ overflowAnchor: "none" }}
+          className="chat-scrollbar relative mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col overflow-y-auto px-3 py-5 sm:px-5"
+        >
+          {isLoading ? (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-brand" />
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center text-center text-sm leading-7 text-slate-500">
+              還沒有訊息。傳送第一則文字或圖片開始對話。
+            </div>
+          ) : (
+            <>
+              {isLoadingOlder ? (
+                <div className="flex justify-center py-1">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-line border-t-brand" />
+                </div>
+              ) : null}
+              <div ref={messageListRef} className="shrink-0">
+                {virtualMetrics.topSpacerHeight > 0 ? (
+                  <div aria-hidden="true" className="shrink-0" style={{ height: virtualMetrics.topSpacerHeight }} />
+                ) : null}
+                {virtualMetrics.rows.map(({ message, index }) => {
+                  const previousMessage = messages[index - 1];
+                  const showTimestamp =
+                    !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
 
-              return (
-                <MeasuredMessage key={message.id} messageId={message.id} onHeightChange={handleMessageHeightChange}>
-                  <MessageBubble
-                    message={message}
-                    currentSender={sender}
-                    members={members}
-                    isHighlighted={highlightedId === message.id}
-                    showTimestamp={showTimestamp}
-                    readByLabels={
-                      message.sender === sender && !message.clientStatus && !message.recalledAt
-                        ? getReadByLabels(message, sender, members)
-                        : null
-                    }
-                    onReply={() => {
-                      setEditing(null);
-                      setReplyTo(message);
-                    }}
-                    onEdit={() => handleStartEdit(message)}
-                    onRecall={() => void handleRecall(message)}
-                    onOpenImages={(urls, index = 0) => setLightboxImages({ urls, index })}
-                    onQuoteClick={focusMessage}
-                  />
-                </MeasuredMessage>
-              );
-            })}
-            {virtualMetrics.bottomSpacerHeight > 0 ? (
-              <div aria-hidden="true" className="shrink-0" style={{ height: virtualMetrics.bottomSpacerHeight }} />
-            ) : null}
-          </>
-        )}
-        {typingSender ? (
-          <div className="flex justify-start px-1 text-sm text-slate-500">
-            {getSenderLabel(typingSender, members)} 正在輸入...
+                  return (
+                    <MeasuredMessage key={message.id} messageId={message.id} onHeightChange={handleMessageHeightChange}>
+                      <MessageBubble
+                        message={message}
+                        currentSender={sender}
+                        members={members}
+                        isHighlighted={highlightedId === message.id}
+                        showTimestamp={showTimestamp}
+                        readByLabels={
+                          message.sender === sender && !message.clientStatus && !message.recalledAt
+                            ? getReadByLabels(message, sender, members)
+                            : null
+                        }
+                        onReply={() => {
+                          setEditing(null);
+                          setReplyTo(message);
+                        }}
+                        onEdit={() => handleStartEdit(message)}
+                        onRecall={() => void handleRecall(message)}
+                        onOpenImages={(urls, index = 0) => setLightboxImages({ urls, index })}
+                        onQuoteClick={focusMessage}
+                      />
+                    </MeasuredMessage>
+                  );
+                })}
+                {virtualMetrics.bottomSpacerHeight > 0 ? (
+                  <div aria-hidden="true" className="shrink-0" style={{ height: virtualMetrics.bottomSpacerHeight }} />
+                ) : null}
+              </div>
+            </>
+          )}
+          {typingSender ? (
+            <div className="flex justify-start px-1 text-sm text-slate-500">
+              {getSenderLabel(typingSender, members)} 正在輸入...
+            </div>
+          ) : null}
+        </section>
+        {showJumpToLatest ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20">
+            <div className="mx-auto flex max-w-5xl justify-end px-3 sm:px-5">
+              <button
+                type="button"
+                onClick={scrollToLatest}
+                title="移至最新訊息"
+                className="pointer-events-auto inline-flex min-h-10 items-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm font-medium text-ink shadow-soft transition hover:border-brand/40 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/15"
+              >
+                <ArrowDown size={16} aria-hidden="true" />
+                {unreadBelowCount}則未讀訊息
+              </button>
+            </div>
           </div>
         ) : null}
-        <div ref={bottomRef} />
-      </section>
+      </div>
 
       {error ? (
         <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-center text-sm text-red-700">{error}</div>
