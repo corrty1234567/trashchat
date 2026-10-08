@@ -1,6 +1,5 @@
 "use client";
 
-import Pusher from "pusher-js";
 import { ArrowDown, ArrowLeft, RefreshCw, Search, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AdminSnakeGate } from "@/components/admin-snake-gate";
@@ -13,7 +12,8 @@ import { VoiceCall } from "@/components/voice-call";
 import { AUTO_FOLLOW_MESSAGE_LIMIT, buildMessageLayout, buildVirtualMetrics, getEstimatedMessageHeight, getMessagesBelowViewport, shouldFollowLatest, type MessageLayout, type VirtualViewport } from "@/lib/chat-scroll";
 import { mentionsSender } from "@/lib/mentions";
 import { applyReadReceipts, mergeLoadedMessages, sortMessagesByCreatedAt, toReplyMessage } from "@/lib/message-state";
-import { PUSHER_CHANNEL, PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED, type MessageChangedEvent } from "@/lib/realtime";
+import { PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED, type MessageChangedEvent } from "@/lib/realtime";
+import { connectPrivateRealtime } from "@/lib/pusher-client";
 import { formatMessageTime, getMessageMinuteKey } from "@/lib/time";
 import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
 
@@ -640,8 +640,6 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       };
     }
 
-    const pusher = new Pusher(key, { cluster });
-    const channel = pusher.subscribe(PUSHER_CHANNEL);
     const handleStateChange = ({ current }: { current: string }) => {
       if (current !== "connected") {
         realtimeConnectedRef.current = false;
@@ -658,65 +656,71 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       schedulePoll(0);
     };
 
-    pusher.connection.bind("state_change", handleStateChange);
-    channel.bind("pusher:subscription_succeeded", handleSubscriptionSucceeded);
-    channel.bind("pusher:subscription_error", handleSubscriptionError);
+    const disconnectRealtime = connectPrivateRealtime(key, cluster, (pusher, channel) => {
+      pusher.connection.bind("state_change", handleStateChange);
+      channel.bind("pusher:subscription_succeeded", handleSubscriptionSucceeded);
+      channel.bind("pusher:subscription_error", handleSubscriptionError);
 
-    channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, (event: MessageChangedEvent | undefined) => {
-      if (event?.type === "read") {
+      channel.bind(PUSHER_EVENT_MESSAGES_CHANGED, (event: MessageChangedEvent | undefined) => {
+        if (event?.type === "read") {
+          if (event.sender === sender) {
+            return;
+          }
+
+          if (event.sender && event.messageIds && event.readAt) {
+            const { messageIds, sender: readSender, readAt } = event;
+            setMessages((currentMessages) => {
+              const nextMessages = applyReadReceipts(currentMessages, messageIds, readSender, readAt);
+              messagesRef.current = nextMessages;
+              return nextMessages;
+            });
+            return;
+          }
+        }
+
+        if (event?.message) {
+          const optimisticId = event.message.sender === sender ? event.clientRequestId : undefined;
+          mergeMessagesIntoState([event.message], optimisticId);
+          return;
+        }
+
+        if (event?.id) {
+          void fetch(`/api/messages/${encodeURIComponent(event.id)}`, { cache: "no-store" })
+            .then(async (response) => {
+              if (!response.ok) {
+                throw new Error("Message synchronization failed.");
+              }
+
+              const data = (await response.json()) as { message: Message };
+              mergeMessagesIntoState([data.message], data.message.sender === sender ? event.clientRequestId : undefined);
+            })
+            .catch(() => void loadMessages().catch(() => undefined));
+          return;
+        }
+
+        void loadMessages().catch(() => undefined);
+      });
+      channel.bind(PUSHER_EVENT_TYPING_CHANGED, (event: { sender: Sender; isTyping: boolean }) => {
         if (event.sender === sender) {
           return;
         }
 
-        if (event.sender && event.messageIds && event.readAt) {
-          const { messageIds, sender: readSender, readAt } = event;
-          setMessages((currentMessages) => {
-            const nextMessages = applyReadReceipts(currentMessages, messageIds, readSender, readAt);
-            messagesRef.current = nextMessages;
-            return nextMessages;
-          });
-          return;
+        if (otherTypingTimerRef.current) {
+          window.clearTimeout(otherTypingTimerRef.current);
+          otherTypingTimerRef.current = null;
         }
-      }
 
-      if (event?.message) {
-        const optimisticId = event.message.sender === sender ? event.clientRequestId : undefined;
-        mergeMessagesIntoState([event.message], optimisticId);
-        return;
-      }
+        setTypingSender(event.isTyping ? event.sender : null);
 
-      if (event?.id) {
-        void fetch(`/api/messages/${encodeURIComponent(event.id)}`, { cache: "no-store" })
-          .then(async (response) => {
-            if (!response.ok) {
-              throw new Error("Message synchronization failed.");
-            }
-
-            const data = (await response.json()) as { message: Message };
-            mergeMessagesIntoState([data.message], data.message.sender === sender ? event.clientRequestId : undefined);
-          })
-          .catch(() => void loadMessages().catch(() => undefined));
-        return;
-      }
-
-      void loadMessages().catch(() => undefined);
-    });
-    channel.bind(PUSHER_EVENT_TYPING_CHANGED, (event: { sender: Sender; isTyping: boolean }) => {
-      if (event.sender === sender) {
-        return;
-      }
-
-      if (otherTypingTimerRef.current) {
-        window.clearTimeout(otherTypingTimerRef.current);
-        otherTypingTimerRef.current = null;
-      }
-
-      setTypingSender(event.isTyping ? event.sender : null);
-
-      if (event.isTyping) {
-        otherTypingTimerRef.current = window.setTimeout(() => setTypingSender(null), TYPING_EXPIRE_MS);
-      }
-    });
+        if (event.isTyping) {
+          otherTypingTimerRef.current = window.setTimeout(() => setTypingSender(null), TYPING_EXPIRE_MS);
+        }
+      });
+      return () => {
+        pusher.connection.unbind("state_change", handleStateChange);
+        channel.unbind_all();
+      };
+    }, handleSubscriptionError);
     schedulePoll();
 
     return () => {
@@ -731,10 +735,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       if (otherTypingTimerRef.current) {
         window.clearTimeout(otherTypingTimerRef.current);
       }
-      pusher.connection.unbind("state_change", handleStateChange);
-      channel.unbind_all();
-      pusher.unsubscribe(PUSHER_CHANNEL);
-      pusher.disconnect();
+      disconnectRealtime();
     };
   }, [loadMessages, mergeMessagesIntoState, sender]);
 

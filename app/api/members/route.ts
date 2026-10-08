@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/admin-auth";
 import { createMember, getMembers } from "@/lib/members";
@@ -9,7 +10,9 @@ const createMemberSchema = z.object({
   name: z.string()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const members = await getMembers();
 
   return NextResponse.json({ members });

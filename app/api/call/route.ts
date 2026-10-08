@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -51,6 +52,8 @@ function serializeSignal(signal: {
 }
 
 export async function GET(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { searchParams } = new URL(request.url);
   const parsed = getCallSignalsSchema.safeParse({
     to: searchParams.get("to"),
@@ -87,6 +90,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const parsed = callSignalSchema.safeParse(await request.json());
 
   if (!parsed.success) {

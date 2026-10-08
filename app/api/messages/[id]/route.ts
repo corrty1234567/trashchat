@@ -1,4 +1,5 @@
 import { after, NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { canEditMessage } from "@/lib/time";
 import { deleteBlobUrls, getMessageBlobUrls } from "@/lib/blob-storage";
@@ -23,7 +24,9 @@ type RouteContext = {
   }>;
 };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { id } = await context.params;
   const message = await prisma.message.findUnique({ where: { id }, include: messageInclude });
 
@@ -31,10 +34,12 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Message not found." }, { status: 404 });
   }
 
-  return NextResponse.json({ message });
+  return NextResponse.json({ message: serializeMessage(message) });
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { id } = await context.params;
   const parsed = updateMessageSchema.safeParse(await request.json());
 
@@ -69,10 +74,12 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   after(notifyMessagesChanged({ type: "edited", id: message.id, message: serializeMessage(message) }));
 
-  return NextResponse.json({ message });
+  return NextResponse.json({ message: serializeMessage(message) });
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { id } = await context.params;
   const parsed = recallMessageSchema.safeParse(await request.json());
 
@@ -98,7 +105,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       include: messageInclude
     });
 
-    return NextResponse.json({ message });
+    return NextResponse.json({ message: message ? serializeMessage(message) : null });
   }
 
   const message = await prisma.message.update({
@@ -116,5 +123,5 @@ export async function DELETE(request: Request, context: RouteContext) {
   after(deleteBlobUrls(getMessageBlobUrls(existing)));
   after(notifyMessagesChanged({ type: "recalled", id: message.id, message: serializeMessage(message) }));
 
-  return NextResponse.json({ message });
+  return NextResponse.json({ message: serializeMessage(message) });
 }

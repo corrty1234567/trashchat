@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { PUSHER_EVENT_TYPING_CHANGED } from "@/lib/realtime";
 import { memberExists } from "@/lib/members";
@@ -12,6 +13,8 @@ const typingSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const parsed = typingSchema.safeParse(await request.json());
 
   if (!parsed.success) {

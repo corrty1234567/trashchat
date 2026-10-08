@@ -1,4 +1,5 @@
 import { after, NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { messageInclude, messageReplySelect, serializeMessage } from "@/lib/message-data";
@@ -64,6 +65,8 @@ function createMessage(message: MessageInput) {
 }
 
 export async function GET(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { searchParams } = new URL(request.url);
   const parsed = getMessagesSchema.safeParse({
     limit: searchParams.get("limit") ?? undefined,
@@ -109,10 +112,12 @@ export async function GET(request: Request) {
   const hasMore = messagesDesc.length > parsed.data.limit;
   const messages = messagesDesc.slice(0, parsed.data.limit).reverse();
 
-  return NextResponse.json({ messages, hasMore, realtimeAvailable: hasRealtimeMessaging() });
+  return NextResponse.json({ messages: messages.map(serializeMessage), hasMore, realtimeAvailable: hasRealtimeMessaging() });
 }
 
 export async function POST(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const parsed = createMessageSchema.safeParse(await request.json());
 
   if (!parsed.success) {

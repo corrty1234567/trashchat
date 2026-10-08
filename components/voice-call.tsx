@@ -2,10 +2,10 @@
 
 import clsx from "clsx";
 import { Loader2, Mic, MicOff, Phone, PhoneCall, PhoneOff, X } from "lucide-react";
-import Pusher from "pusher-js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CallSignal, CallSignalType } from "@/lib/call";
-import { PUSHER_CHANNEL, PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
+import { PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
+import { connectPrivateRealtime } from "@/lib/pusher-client";
 import { getSenderLabel, type Member, type Sender } from "@/lib/types";
 
 type CallStatus = "idle" | "calling" | "ringing" | "connecting" | "active";
@@ -616,25 +616,28 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
       return;
     }
 
-    const pusher = new Pusher(pusherKey, {
-      cluster: pusherCluster
-    });
-    const channel = pusher.subscribe(PUSHER_CHANNEL);
     const handleStateChange = ({ current }: { current: string }) => {
-      pusherConnectedRef.current = current === "connected";
+      if (current !== "connected") pusherConnectedRef.current = false;
     };
+    const handleSubscriptionSucceeded = () => { pusherConnectedRef.current = true; };
+    const handleSubscriptionError = () => { pusherConnectedRef.current = false; };
 
-    pusher.connection.bind("state_change", handleStateChange);
-    channel.bind(PUSHER_EVENT_CALL_SIGNAL, (signal: CallSignal) => {
-      void receiveSignal(signal);
-    });
+    const disconnectRealtime = connectPrivateRealtime(pusherKey, pusherCluster, (pusher, channel) => {
+      pusher.connection.bind("state_change", handleStateChange);
+      channel.bind("pusher:subscription_succeeded", handleSubscriptionSucceeded);
+      channel.bind("pusher:subscription_error", handleSubscriptionError);
+      channel.bind(PUSHER_EVENT_CALL_SIGNAL, (signal: CallSignal) => {
+        void receiveSignal(signal);
+      });
+      return () => {
+        pusher.connection.unbind("state_change", handleStateChange);
+        channel.unbind_all();
+      };
+    }, handleSubscriptionError);
 
     return () => {
       pusherConnectedRef.current = false;
-      pusher.connection.unbind("state_change", handleStateChange);
-      channel.unbind(PUSHER_EVENT_CALL_SIGNAL);
-      pusher.unsubscribe(PUSHER_CHANNEL);
-      pusher.disconnect();
+      disconnectRealtime();
     };
   }, [pusherCluster, pusherKey, receiveSignal]);
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { serializeMessage } from "@/lib/message-data";
 
 export const runtime = "nodejs";
 
@@ -75,5 +76,5 @@ export async function GET(request: Request) {
     include: messageInclude
   });
 
-  return NextResponse.json({ messages });
+  return NextResponse.json({ messages: messages.map(serializeMessage) });
 }

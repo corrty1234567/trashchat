@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { serializeMessage } from "@/lib/message-data";
 
 export const runtime = "nodejs";
 
@@ -37,6 +39,8 @@ const messageInclude = {
 } as const;
 
 export async function GET(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const { searchParams } = new URL(request.url);
   const parsed = searchMessagesSchema.safeParse({
     q: searchParams.get("q") ?? undefined,
@@ -67,5 +71,5 @@ export async function GET(request: Request) {
     include: messageInclude
   });
 
-  return NextResponse.json({ messages });
+  return NextResponse.json({ messages: messages.map(serializeMessage) });
 }

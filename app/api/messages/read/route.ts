@@ -1,4 +1,5 @@
 import { after, NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { memberExists } from "@/lib/members";
 import { prisma } from "@/lib/prisma";
@@ -12,6 +13,8 @@ const markReadSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const parsed = markReadSchema.safeParse(await request.json());
 
   if (!parsed.success) {

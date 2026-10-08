@@ -1,8 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { verifyChatRequest } from "@/lib/chat-auth";
 
 const ADMIN_SESSION_COOKIE = "trashchat_admin";
-const ADMIN_SESSION_PAYLOAD = "admin";
 const ADMIN_SESSION_MAX_AGE_SECONDS = 6 * 60 * 60;
 
 function getAdminCode() {
@@ -10,12 +10,9 @@ function getAdminCode() {
 }
 
 function getAdminSecret() {
-  return (
-    process.env.TRASHCHAT_ADMIN_SECRET?.trim() ||
-    process.env.TRASHCHAT_AUTH_PASSWORD?.trim() ||
-    process.env.DATABASE_URL?.trim() ||
-    "trashchat-admin-dev-secret"
-  );
+  const password = process.env.TRASHCHAT_AUTH_PASSWORD;
+  if (!password) throw new Error("Chat authentication is not configured.");
+  return `${process.env.TRASHCHAT_ADMIN_SECRET || password}:${password}`;
 }
 
 function sign(value: string) {
@@ -40,7 +37,7 @@ function getCookie(request: Request, name: string) {
     const [cookieName, ...valueParts] = cookie.trim().split("=");
 
     if (cookieName === name) {
-      return decodeURIComponent(valueParts.join("="));
+      return valueParts.join("=");
     }
   }
 
@@ -48,8 +45,9 @@ function getCookie(request: Request, name: string) {
 }
 
 function createAdminSessionValue() {
-  const signature = sign(ADMIN_SESSION_PAYLOAD);
-  return `${ADMIN_SESSION_PAYLOAD}.${signature}`;
+  const expires = Math.floor(Date.now() / 1000) + ADMIN_SESSION_MAX_AGE_SECONDS;
+  const payload = `admin.${expires}.${randomUUID()}`;
+  return `${payload}.${sign(payload)}`;
 }
 
 export function isValidAdminCode(code: string) {
@@ -57,19 +55,23 @@ export function isValidAdminCode(code: string) {
 }
 
 export function verifyAdminRequest(request: Request) {
+  if (!verifyChatRequest(request)) return false;
   const sessionValue = getCookie(request, ADMIN_SESSION_COOKIE);
 
   if (!sessionValue) {
     return false;
   }
 
-  const [payload, signature] = sessionValue.split(".");
+  const [role, expires, nonce, signature, extra] = sessionValue.split(".");
+  const expiresAt = Number(expires);
+  const now = Math.floor(Date.now() / 1000);
 
-  if (payload !== ADMIN_SESSION_PAYLOAD || !signature) {
+  if (role !== "admin" || !signature || extra !== undefined || !/^[a-f0-9-]{36}$/.test(nonce ?? "") ||
+      !Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + ADMIN_SESSION_MAX_AGE_SECONDS) {
     return false;
   }
 
-  return safeEqual(signature, sign(payload));
+  return safeEqual(signature, sign(`${role}.${expires}.${nonce}`));
 }
 
 export function requireAdmin(request: Request) {

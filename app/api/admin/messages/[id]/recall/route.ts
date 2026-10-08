@@ -35,7 +35,7 @@ export async function POST(request: Request, context: RouteContext) {
       include: messageInclude
     });
 
-    return NextResponse.json({ message });
+    return NextResponse.json({ message: message ? serializeMessage(message) : null });
   }
 
   const message = await prisma.message.update({
@@ -53,5 +53,5 @@ export async function POST(request: Request, context: RouteContext) {
   after(deleteBlobUrls(getMessageBlobUrls(existing)));
   after(notifyMessagesChanged({ type: "recalled", id: message.id, message: serializeMessage(message) }));
 
-  return NextResponse.json({ message });
+  return NextResponse.json({ message: serializeMessage(message) });
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 import { z } from "zod";
 import { isValidAdminCode, setAdminSessionCookie } from "@/lib/admin-auth";
 
@@ -9,6 +10,8 @@ const adminSessionSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const parsed = adminSessionSchema.safeParse(await request.json().catch(() => null));
 
   if (!parsed.success || !isValidAdminCode(parsed.data.code)) {

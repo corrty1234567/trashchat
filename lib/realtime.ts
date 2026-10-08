@@ -1,6 +1,7 @@
 import type { Message, Sender } from "@/lib/types";
 
-export const PUSHER_CHANNEL = "trashchat-main";
+export const PUSHER_CHANNEL = "private-encrypted-trashchat-main";
+export const PUSHER_AUTH_ENDPOINT = "/api/realtime/auth";
 export const PUSHER_EVENT_MESSAGES_CHANGED = "messages:changed";
 export const PUSHER_EVENT_TYPING_CHANGED = "typing:changed";
 export const PUSHER_EVENT_CALL_SIGNAL = "call:signal";

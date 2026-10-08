@@ -14,7 +14,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "security:migrate-images": "node --env-file=.env --experimental-strip-types scripts/protect-images.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

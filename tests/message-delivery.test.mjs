@@ -1,34 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { runInThisContext } from "node:vm";
-import ts from "typescript";
-
-const root = fileURLToPath(new URL("../", import.meta.url));
-const nativeRequire = createRequire(import.meta.url);
-
-// Exercise the actual TypeScript modules with isolated database and network mocks.
-function loadModule(relativePath, mocks = {}, cache = new Map()) {
-  const filename = resolve(root, relativePath);
-  if (cache.has(filename)) return cache.get(filename);
-  const loadedModule = { exports: {} };
-  cache.set(filename, loadedModule.exports);
-  const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true }
-  });
-  const requireModule = (specifier) => {
-    if (Object.hasOwn(mocks, specifier)) return mocks[specifier];
-    if (specifier.startsWith("@/")) return loadModule(`${specifier.slice(2)}.ts`, mocks, cache);
-    return nativeRequire(specifier);
-  };
-  runInThisContext(`(function(require, module, exports) {\n${outputText}\n})`, { filename })(
-    requireModule, loadedModule, loadedModule.exports
-  );
-  return loadedModule.exports;
-}
+import { loadModule } from "./helpers/load-typescript.mjs";
 
 function storedMessage(overrides = {}) {
   return {
@@ -51,6 +23,7 @@ function routeHarness({ membersExist = true, replies = [], realtimeAvailable = t
   const creates = [];
   const validations = [];
   const route = loadModule("app/api/messages/route.ts", {
+    "@/lib/chat-auth": { requireChatAccess: () => null },
     "next/server": { NextResponse: { json: (body, options) => Response.json(body, options) }, after: (task) => afterTasks.push(task) },
     "@/lib/prisma": { prisma: {
       member: { count: async ({ where }) => { validations.push(where); return membersExist ? where.id.in.length : 0; } },
@@ -136,7 +109,8 @@ test("reply and image data are included in the direct delivery", async () => {
 
 test("UTF-8 messages over Pusher's size limit retain their ID for targeted retrieval", async () => {
   const events = [];
-  const env = { PUSHER_APP_ID: "test", NEXT_PUBLIC_PUSHER_KEY: "test", PUSHER_SECRET: "test", PUSHER_CLUSTER: "ap3" };
+  const env = { PUSHER_APP_ID: "test", NEXT_PUBLIC_PUSHER_KEY: "test", PUSHER_SECRET: "test", PUSHER_CLUSTER: "ap3",
+    TRASHCHAT_AUTH_PASSWORD: "test-only-long-random-password", TRASHCHAT_DATA_KEY: "01".repeat(32) };
   const originalEnv = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
   Object.assign(process.env, env);
   try {
@@ -227,6 +201,7 @@ test("large read batches publish small receipt events without delaying the respo
   let finishNotifications;
   const notification = new Promise((finish) => { finishNotifications = finish; });
   const route = loadModule("app/api/messages/read/route.ts", {
+    "@/lib/chat-auth": { requireChatAccess: () => null },
     "next/server": { NextResponse: { json: (body, options) => Response.json(body, options) }, after: (task) => tasks.push(task) },
     "@/lib/members": { memberExists: async () => true },
     "@/lib/prisma": { prisma: {
@@ -248,6 +223,7 @@ test("large read batches publish small receipt events without delaying the respo
 test("targeted retrieval returns the full message and a 404 for missing IDs", async () => {
   let message = storedMessage();
   const route = loadModule("app/api/messages/[id]/route.ts", {
+    "@/lib/chat-auth": { requireChatAccess: () => null },
     "@/lib/prisma": { prisma: { message: { findUnique: async () => message } } },
     "@/lib/blob-storage": {},
     "@/lib/pusher-server": {}

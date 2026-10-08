@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import { requireChatAccess } from "@/lib/chat-auth";
 
 export const runtime = "nodejs";
 
 const MAX_HTML_BYTES = 256 * 1024;
 const FETCH_TIMEOUT_MS = 6000;
-const PREVIEW_CACHE_CONTROL = "public, s-maxage=86400, stale-while-revalidate=604800";
+const PREVIEW_CACHE_CONTROL = "private, no-store";
 
 function isBlockedHost(hostname: string) {
   const normalized = hostname.toLowerCase();
@@ -91,6 +92,8 @@ async function readLimitedText(response: Response) {
 }
 
 export async function GET(request: Request) {
+  const accessError = requireChatAccess(request);
+  if (accessError) return accessError;
   const requestUrl = new URL(request.url);
   const target = requestUrl.searchParams.get("url");
 

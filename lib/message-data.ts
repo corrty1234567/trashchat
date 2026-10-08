@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import type { Message } from "@/lib/types";
+import { protectMessageMedia } from "@/lib/media-urls";
 
 export const messageReplySelect = {
   id: true,
@@ -30,7 +31,7 @@ type StoredMessage = Prisma.MessageGetPayload<{ include: typeof messageInclude }
 
 export function serializeMessage(message: StoredMessage): Message {
   return {
-    ...message,
+    ...protectMessageMedia(message),
     createdAt: message.createdAt.toISOString(),
     updatedAt: message.updatedAt.toISOString(),
     editedAt: message.editedAt?.toISOString() ?? null,
@@ -39,7 +40,7 @@ export function serializeMessage(message: StoredMessage): Message {
     reads: message.reads.map((read) => ({ ...read, readAt: read.readAt.toISOString() })),
     replyTo: message.replyTo
       ? {
-          ...message.replyTo,
+          ...protectMessageMedia(message.replyTo),
           createdAt: message.replyTo.createdAt.toISOString(),
           editedAt: message.replyTo.editedAt?.toISOString() ?? null,
           recalledAt: message.replyTo.recalledAt?.toISOString() ?? null
