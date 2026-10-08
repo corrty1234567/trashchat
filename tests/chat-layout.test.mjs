@@ -5,23 +5,34 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { loadModule } from "./helpers/load-typescript.mjs";
 
 const noop = () => {};
-const { ChatSidebar } = loadModule("components/chat-sidebar.tsx");
 const { MessageBubble } = loadModule("components/message-bubble.tsx", {
   "@/components/linkified-text": { LinkifiedText: ({ text }) => React.createElement("p", null, text) },
   "@/components/link-preview-card": { LinkPreviewCard: () => null }
 });
 const { ChatComposer } = loadModule("components/chat-composer.tsx");
+const { ChatRoom } = loadModule("components/chat-room.tsx", {
+  "next/dynamic": { default: () => () => null, __esModule: true },
+  "@/components/admin-snake-gate": { AdminSnakeGate: () => null },
+  "@/components/browser-chat-status": { BrowserChatStatus: () => null },
+  "@/components/chat-composer": { ChatComposer },
+  "@/components/image-lightbox": { ImageLightbox: () => null },
+  "@/components/member-admin-panel": { MemberAdminPanel: () => null },
+  "@/components/message-bubble": { MessageBubble },
+  "@/components/voice-call": { VoiceCall: () => React.createElement("button", { "aria-label": "語音通話" }) }
+});
 
-test("sidebar exposes existing workflows and actual message metadata without inventing presence", () => {
-  const html = renderToStaticMarkup(React.createElement(ChatSidebar, {
-    identity: "10", memberCount: 3, lastMessageTime: "18:39", unreadCount: 4, isAtBottom: true, isOpen: false,
-    onClose: noop, onShowChat: noop, onShowHistory: noop, onShowImages: noop, onSearch: noop,
-    onLatest: noop, onSwitchIdentity: noop
+test("compact chat restores direct controls without added navigation or shortcuts", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatRoom, {
+    sender: "CHEN", members: [{ id: "CHEN", name: "10" }, { id: "ZUO", name: "27" }],
+    onMembersChange: noop, onSwitchIdentity: noop
   }));
-  for (const label of ["通話紀錄", "聊天圖片", "搜尋訊息", "換身分", "最後訊息 18:39"]) assert.ok(html.includes(label));
-  assert.ok(html.includes('aria-current="page"'));
-  assert.ok(!html.includes("最後上線"));
-  assert.ok(!html.includes('aria-modal="true"'), "closed mobile navigation must not mount a hidden modal");
+  for (const label of ["搜尋訊息", "聊天圖片", "語音通話", "重新整理", "換身分", "開啟 trashchat"]) {
+    assert.ok(html.includes(`aria-label="${label}"`));
+  }
+  for (const label of ["自動滑到底", "側邊導覽", "開啟導覽", "更多選項", "位成員", "最後訊息"]) {
+    assert.ok(!html.includes(label), `must not restore unsolicited control: ${label}`);
+  }
+  assert.ok(html.includes("max-w-4xl"));
 });
 
 test("own, incoming, recalled, and failed bubbles have mutually exclusive readable colors", () => {
@@ -33,6 +44,7 @@ test("own, incoming, recalled, and failed bubbles have mutually exclusive readab
     onReply: noop, onEdit: noop, onRecall: noop, onOpenImages: noop, onQuoteClick: noop
   }));
   assert.ok(render({}).includes("border-brand bg-brand text-white"));
+  assert.ok(render({}).includes("border px-3 py-2"));
   assert.ok(render({ sender: "ZUO" }).includes("bg-white text-ink"));
   const recalled = render({ text: null, recalledAt: new Date().toISOString() });
   assert.ok(recalled.includes("border-dashed border-slate-300 bg-transparent text-slate-500"));
@@ -42,15 +54,28 @@ test("own, incoming, recalled, and failed bubbles have mutually exclusive readab
   assert.ok(!failed.includes("bg-brand text-white"));
 });
 
-test("composer keeps mention controls available without a permanently expanded member list", () => {
+test("composer restores visible mention shortcuts and a compact input", () => {
   const html = renderToStaticMarkup(React.createElement(ChatComposer, {
     currentSender: "CHEN", members: [{ id: "CHEN", name: "10" }, { id: "ZUO", name: "27" }], isSending: false,
     replyTo: null, editing: null, editingLabel: null, onCancelReply: noop, onCancelEdit: noop,
     onTypingActivity: noop, onSubmit: async () => {}
   }));
-  assert.ok(html.includes('aria-label="提及成員"'));
-  assert.ok(html.includes('aria-expanded="false"'));
+  assert.ok(!html.includes('aria-label="提及成員"'));
+  assert.ok(html.includes("@27"));
+  assert.ok(!html.includes("@10"));
+  assert.ok(html.includes("max-w-4xl"));
+  assert.ok(html.includes("min-h-11"));
   assert.ok(html.includes('aria-label="訊息內容"'));
   assert.ok(html.includes('aria-label="上傳圖片"'));
+});
+
+test("editing still hides mention shortcuts and disables photo selection", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatComposer, {
+    currentSender: "CHEN", members: [{ id: "CHEN", name: "10" }, { id: "ZUO", name: "27" }], isSending: false,
+    replyTo: null, editing: { id: "editing-message", text: "original" }, editingLabel: "10",
+    onCancelReply: noop, onCancelEdit: noop, onTypingActivity: noop, onSubmit: async () => {}
+  }));
   assert.ok(!html.includes("@27"));
+  assert.match(html, /type="file"[^>]*disabled=""/);
+  assert.ok(html.includes('aria-label="儲存編輯"'));
 });

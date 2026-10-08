@@ -55,7 +55,7 @@ export function LinkifiedText({ text, isOwn, members }: LinkifiedTextProps) {
   }
 
   return (
-    <p className="whitespace-pre-wrap break-words text-base leading-7">
+    <p className="whitespace-pre-wrap break-words text-[15px] leading-6">
       {parts.map((part, index) =>
         part.type === "link" ? (
           <a

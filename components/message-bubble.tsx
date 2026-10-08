@@ -139,10 +139,10 @@ export function MessageBubble({
         isHighlighted && "rounded-lg bg-yellow-100/70 py-2"
       )}
     >
-      <div className={clsx("flex max-w-[94%] items-end gap-1.5 sm:max-w-[80%] sm:gap-2 2xl:max-w-[70%]", isOwn && "flex-row-reverse")}>
+      <div className={clsx("flex max-w-[94%] items-end gap-1.5 sm:max-w-[75%] sm:gap-2", isOwn && "flex-row-reverse")}>
         <div className={clsx("flex min-w-0 flex-col gap-1", isOwn ? "items-end" : "items-start")}>
           {showMeta ? (
-            <div className={clsx("flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 text-[13px] text-slate-500", isOwn && "flex-row-reverse")}>
+            <div className={clsx("flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 text-[11px] text-slate-500", isOwn && "flex-row-reverse")}>
               {showTimestamp ? <span className="max-w-full truncate font-semibold text-slate-600" title={getSenderLabel(message.sender, members)}>{isOwn ? "你" : getSenderLabel(message.sender, members)}</span> : null}
               {showTimestamp ? <span>{formatMessageTime(message.createdAt)}</span> : null}
               {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
@@ -153,7 +153,7 @@ export function MessageBubble({
 
           <div
             className={clsx(
-              "max-w-full rounded-lg border px-4 py-3",
+              "max-w-full rounded-lg border px-3 py-2",
               isRecalled ? "border-dashed border-slate-300 bg-transparent text-slate-500" :
                 message.clientStatus === "failed" ? "border-red-200 bg-red-50 text-red-700" :
                   isOwn ? "border-brand bg-brand text-white" : "border-line/70 bg-white text-ink",
@@ -203,7 +203,7 @@ export function MessageBubble({
             {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
           </div>
           {readByLabels ? (
-            <div className={clsx("flex max-w-full flex-wrap items-center gap-1 px-1 text-xs text-slate-500", isOwn ? "justify-end text-right" : "text-left")}>
+            <div className={clsx("flex max-w-full flex-wrap items-center gap-1 px-1 text-[11px] text-slate-500", isOwn ? "justify-end text-right" : "text-left")}>
               {readByLabels.length > 0 ? <CheckCheck size={12} className="shrink-0 text-brand/70" /> : null}
               <span className="min-w-0 break-words">{readByLabels.length > 0 ? `已讀 ${readByLabels.join("、")}` : "未讀"}</span>
             </div>
