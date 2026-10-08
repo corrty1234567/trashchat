@@ -15,7 +15,10 @@ type RingMode = "outgoing" | "incoming";
 type VoiceCallProps = {
   sender: Sender;
   members: readonly Member[];
+  openRequest?: VoiceCallOpenRequest | null;
 };
+
+export type VoiceCallOpenRequest = { id: number; view: "dial" | "history" };
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -44,7 +47,7 @@ async function readApiError(response: Response, fallback: string) {
   return typeof data?.error === "string" ? data.error : fallback;
 }
 
-export function VoiceCall({ sender, members }: VoiceCallProps) {
+export function VoiceCall({ sender, members, openRequest }: VoiceCallProps) {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [activePeer, setActivePeer] = useState<Sender | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +75,12 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
   const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
   const peerOptions = useMemo(() => members.filter((member) => member.id !== sender), [members, sender]);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    setPanelView(openRequest.view);
+    setIsPanelOpen(true);
+  }, [openRequest]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -827,7 +836,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
             ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
             : status !== "idle"
               ? "border-brand/30 bg-brand/10 text-brand hover:bg-brand/15"
-              : ""
+              : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
         )}
         aria-label="語音通話"
         title="語音通話"
