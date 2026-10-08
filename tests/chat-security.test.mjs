@@ -67,25 +67,66 @@ test("configuration errors identify the failed check without exposing credential
     }
     process.env.TRASHCHAT_AUTH_PASSWORD = "test-only-long-random-password";
     assert.equal(auth.getChatAuthConfigurationError(), null);
-    assert.equal(proxy(request("/")).status, 401);
+    assert.equal(proxy(request("/")).status, 200);
   } finally {
     if (password === undefined) delete process.env.TRASHCHAT_AUTH_PASSWORD;
     else process.env.TRASHCHAT_AUTH_PASSWORD = password;
   }
 });
 
-test("authenticated website entry issues a signed, HttpOnly, Secure, strict session", () => {
+test("public website entry automatically issues a session without any login challenge", () => {
   process.env.NODE_ENV = "production";
-  assert.equal(proxy(request("/")).status, 401);
-  assert.equal(proxy(request("/", { headers: { authorization: "Basic invalid" } })).status, 401);
-  const response = proxy(request("/", { headers: { authorization: basic } }));
-  assert.equal(response.status, 200);
-  const issuedCookie = response.cookies.get(auth.CHAT_SESSION_COOKIE);
-  assert.ok(auth.verifyChatSession(issuedCookie.value));
-  const header = response.headers.get("set-cookie");
-  for (const flag of ["HttpOnly", "Secure", "SameSite=strict"]) assert.ok(header.includes(flag));
-  assert.match(response.headers.get("cache-control"), /private.*no-store/);
-  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  for (const headers of [{}, { authorization: "Basic invalid" }, { authorization: basic }]) {
+    const response = proxy(request("/", { headers }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("www-authenticate"), null);
+    const issuedCookie = response.cookies.get(auth.CHAT_SESSION_COOKIE);
+    assert.ok(auth.verifyChatSession(issuedCookie.value));
+    const header = response.headers.get("set-cookie");
+    for (const flag of ["HttpOnly", "Secure", "SameSite=strict"]) assert.ok(header.includes(flag));
+    assert.match(response.headers.get("cache-control"), /private.*no-store/);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.ok(!header.includes(process.env.TRASHCHAT_AUTH_PASSWORD));
+  }
+});
+
+test("only homepage entry issues a session and direct API failures never challenge for a password", () => {
+  for (const path of ["/missing-page", "/_next/webpack-hmr"]) {
+    const response = proxy(request(path));
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.equal(response.headers.get("www-authenticate"), null);
+  }
+  assert.equal(proxy(request("/", { method: "POST" })).headers.get("set-cookie"), null);
+  const response = proxy(request("/api/messages"));
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("www-authenticate"), null);
+  assert.equal(response.headers.get("set-cookie"), null);
+});
+
+test("automatic website sessions work for APIs and revisits keep the existing session", () => {
+  const entry = proxy(request("/"));
+  const value = entry.cookies.get(auth.CHAT_SESSION_COOKIE).value;
+  const headers = { cookie: `${auth.CHAT_SESSION_COOKIE}=${value}`, "sec-fetch-site": "same-origin" };
+  for (const path of ["/", "/api/messages", "/api/realtime/auth", "/api/media/example"]) {
+    const response = proxy(request(path, { headers }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.equal(response.headers.get("www-authenticate"), null);
+  }
+});
+
+test("expired website sessions are replaced on homepage entry without prompting for credentials", () => {
+  const value = auth.createChatSession(Date.now() - (auth.CHAT_SESSION_MAX_AGE_SECONDS + 1) * 1000);
+  const headers = { cookie: `${auth.CHAT_SESSION_COOKIE}=${value}` };
+  const api = proxy(request("/api/messages", { headers }));
+  assert.equal(api.status, 401);
+  assert.equal(api.headers.get("set-cookie"), null);
+  const entry = proxy(request("/", { headers }));
+  assert.equal(entry.status, 200);
+  assert.equal(entry.headers.get("www-authenticate"), null);
+  const replacement = entry.cookies.get(auth.CHAT_SESSION_COOKIE).value;
+  assert.notEqual(replacement, value);
+  assert.ok(auth.verifyChatSession(replacement));
 });
 
 test("all API paths reject direct access, including valid Basic credentials without website entry", () => {

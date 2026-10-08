@@ -34,19 +34,6 @@ function safeEqual(first: string, second: string) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function verifyChatCredentials(header: string | null) {
-  const expected = getCredentials();
-  if (!expected || !header?.startsWith("Basic ")) return false;
-  try {
-    const value = Buffer.from(header.slice(6), "base64").toString("utf8");
-    const separator = value.indexOf(":");
-    return separator >= 0 && safeEqual(value.slice(0, separator), expected.user) &&
-      safeEqual(value.slice(separator + 1), expected.password);
-  } catch {
-    return false;
-  }
-}
-
 function sign(payload: string) {
   const credentials = getCredentials();
   if (!credentials) throw new Error("Chat authentication is not configured.");

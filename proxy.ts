@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
   CHAT_SESSION_COOKIE, CHAT_SESSION_MAX_AGE_SECONDS, createChatSession,
-  getChatAuthConfigurationError, isSameOriginRequest, verifyChatCredentials, verifyChatSession
+  getChatAuthConfigurationError, isSameOriginRequest, verifyChatSession
 } from "@/lib/chat-auth";
 
 function protectResponse(response: NextResponse) {
@@ -28,19 +28,14 @@ export function proxy(request: NextRequest) {
     return protectResponse(NextResponse.json({ error: "Cross-origin access denied." }, { status: 403 }));
   }
 
-  // API credentials are issued only after authenticated entry through the website.
-  if (!session && (isApi || !verifyChatCredentials(request.headers.get("authorization")))) {
-    const response = isApi
-      ? NextResponse.json({ error: "Website session required." }, { status: 401 })
-      : new NextResponse("Authentication required.", {
-          status: 401,
-          headers: { "WWW-Authenticate": 'Basic realm="trashchat", charset="UTF-8"' }
-        });
-    return protectResponse(response);
+  if (isApi && !session) {
+    return protectResponse(NextResponse.json({ error: "Website session required." }, { status: 401 }));
   }
 
+  // Public entry preserves identity selection without a login; this is not user authentication.
+  const isWebsiteEntry = request.nextUrl.pathname === "/" && request.method === "GET";
   const response = protectResponse(NextResponse.next());
-  if (!session || session.renew) {
+  if ((!session && isWebsiteEntry) || session?.renew) {
     response.cookies.set({
       name: CHAT_SESSION_COOKIE,
       value: createChatSession(),
