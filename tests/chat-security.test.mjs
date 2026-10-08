@@ -39,6 +39,41 @@ test("missing and example passwords fail closed for both the website and every A
   process.env.TRASHCHAT_AUTH_PASSWORD = "test-only-long-random-password";
 });
 
+test("configuration errors identify the failed check without exposing credentials", async () => {
+  const password = process.env.TRASHCHAT_AUTH_PASSWORD;
+  try {
+    const cases = [
+      [undefined, "missing or empty"],
+      ["", "missing or empty"],
+      ["   ", "missing or empty"],
+      ["change-this-password", "example password"],
+      ["private-short", "too short"],
+      ["       private-short       ", "too short"]
+    ];
+    for (const [value, expected] of cases) {
+      if (value === undefined) delete process.env.TRASHCHAT_AUTH_PASSWORD;
+      else process.env.TRASHCHAT_AUTH_PASSWORD = value;
+      assert.ok(auth.getChatAuthConfigurationError().includes(expected));
+      for (const path of ["/", "/api/messages"]) {
+        const response = proxy(request(path));
+        assert.equal(response.status, 503);
+        const body = await response.text();
+        assert.ok(body.includes("TRASHCHAT_AUTH_PASSWORD"));
+        assert.ok(body.includes(expected));
+        if (value?.trim()) assert.ok(!body.includes(value.trim()));
+        assert.match(response.headers.get("cache-control"), /private.*no-store/);
+        assert.equal(response.headers.get("set-cookie"), null);
+      }
+    }
+    process.env.TRASHCHAT_AUTH_PASSWORD = "test-only-long-random-password";
+    assert.equal(auth.getChatAuthConfigurationError(), null);
+    assert.equal(proxy(request("/")).status, 401);
+  } finally {
+    if (password === undefined) delete process.env.TRASHCHAT_AUTH_PASSWORD;
+    else process.env.TRASHCHAT_AUTH_PASSWORD = password;
+  }
+});
+
 test("authenticated website entry issues a signed, HttpOnly, Secure, strict session", () => {
   process.env.NODE_ENV = "production";
   assert.equal(proxy(request("/")).status, 401);

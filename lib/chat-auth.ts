@@ -4,9 +4,23 @@ export const CHAT_SESSION_COOKIE = "trashchat_session";
 export const CHAT_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_RENEW_AFTER_SECONDS = 24 * 60 * 60;
 
+export function getChatAuthConfigurationError() {
+  const password = process.env.TRASHCHAT_AUTH_PASSWORD;
+  if (!password || !password.trim()) {
+    return "TRASHCHAT_AUTH_PASSWORD is missing or empty in this deployment. Set it in the project's Production environment and redeploy.";
+  }
+  if (password === "change-this-password") {
+    return "TRASHCHAT_AUTH_PASSWORD still uses the example password. Set a private password of at least 16 characters and redeploy.";
+  }
+  if (password.trim().length < 16) {
+    return "TRASHCHAT_AUTH_PASSWORD is too short. Use at least 16 characters, excluding leading and trailing spaces, and redeploy.";
+  }
+  return null;
+}
+
 function getCredentials() {
   const password = process.env.TRASHCHAT_AUTH_PASSWORD;
-  if (!password || password.trim().length < 16 || password === "change-this-password") return null;
+  if (!password || getChatAuthConfigurationError()) return null;
   return { user: process.env.TRASHCHAT_AUTH_USER || "trashchat", password };
 }
 

@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
   CHAT_SESSION_COOKIE, CHAT_SESSION_MAX_AGE_SECONDS, createChatSession,
-  isChatAuthConfigured, isSameOriginRequest, verifyChatCredentials, verifyChatSession
+  getChatAuthConfigurationError, isSameOriginRequest, verifyChatCredentials, verifyChatSession
 } from "@/lib/chat-auth";
 
 function protectResponse(response: NextResponse) {
@@ -17,8 +17,9 @@ function protectResponse(response: NextResponse) {
 }
 
 export function proxy(request: NextRequest) {
-  if (!isChatAuthConfigured()) {
-    return protectResponse(new NextResponse("Chat access is disabled until authentication is configured.", { status: 503 }));
+  const configurationError = getChatAuthConfigurationError();
+  if (configurationError) {
+    return protectResponse(new NextResponse(configurationError, { status: 503 }));
   }
 
   const isApi = request.nextUrl.pathname.startsWith("/api/");
