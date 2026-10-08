@@ -15,7 +15,7 @@ export function loadModule(relativePath, mocks = {}, cache = new Map()) {
   const loadedModule = { exports: {} };
   cache.set(filename, loadedModule.exports);
   const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true }
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   });
   const requireModule = (specifier) => {
     if (Object.hasOwn(mocks, specifier)) return mocks[specifier];

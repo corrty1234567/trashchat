@@ -17,8 +17,8 @@ body {
 
 body {
   margin: 0;
-  background: #f4f6f7;
-  color: #202729;
+  background: #f5f6f8;
+  color: #26364b;
   font-family:
     Inter,
     ui-sans-serif,
@@ -43,12 +43,16 @@ button {
 }
 
 ::selection {
-  background: rgba(24, 118, 95, 0.18);
+  background: rgba(23, 105, 255, 0.16);
 }
 
 @layer components {
   .icon-button {
-    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10;
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:cursor-not-allowed disabled:opacity-40 sm:h-11 sm:w-11;
+  }
+
+  .sidebar-link {
+    @apply flex min-h-12 w-full items-center gap-4 rounded-lg px-4 py-3 text-base text-slate-600 transition hover:bg-slate-50 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30;
   }
 
   .lightbox-button {

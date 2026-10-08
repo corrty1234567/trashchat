@@ -42,7 +42,7 @@ export function LinkifiedText({ text, isOwn, members }: LinkifiedTextProps) {
         <span
           key={`${part.value}-${partIndex}-${mentionIndex}`}
           className={clsx(
-            "inline-flex rounded px-1 font-semibold",
+            "rounded px-1 font-semibold",
             isOwn ? "bg-white/20 text-white" : "bg-brand/10 text-brand"
           )}
         >
@@ -55,7 +55,7 @@ export function LinkifiedText({ text, isOwn, members }: LinkifiedTextProps) {
   }
 
   return (
-    <p className="whitespace-pre-wrap break-words text-[15px] leading-6">
+    <p className="whitespace-pre-wrap break-words text-base leading-7">
       {parts.map((part, index) =>
         part.type === "link" ? (
           <a

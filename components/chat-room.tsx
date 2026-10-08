@@ -1,15 +1,16 @@
 "use client";
 
-import { ArrowDown, ArrowLeft, Images, MessageCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, History, Images, LogOut, Menu, MessageCircle, MoreHorizontal, RefreshCw, Search, Users, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AdminSnakeGate } from "@/components/admin-snake-gate";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
 import { ChatComposer, type ComposerPayload } from "@/components/chat-composer";
+import { ChatSidebar } from "@/components/chat-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { MemberAdminPanel } from "@/components/member-admin-panel";
 import { MessageBubble } from "@/components/message-bubble";
-import { VoiceCall } from "@/components/voice-call";
+import { VoiceCall, type VoiceCallOpenRequest } from "@/components/voice-call";
 import { AUTO_FOLLOW_MESSAGE_LIMIT, buildMessageLayout, buildVirtualMetrics, getEstimatedMessageHeight, getMessagesBelowViewport, shouldFollowLatest, type MessageLayout, type VirtualViewport } from "@/lib/chat-scroll";
 import { mentionsSender } from "@/lib/mentions";
 import { applyReadReceipts, mergeLoadedMessages, sortMessagesByCreatedAt, toReplyMessage } from "@/lib/message-state";
@@ -244,6 +245,12 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isSnakeGateOpen, setIsSnakeGateOpen] = useState(false);
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [callPanelRequest, setCallPanelRequest] = useState<VoiceCallOpenRequest | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [unreadBoundary, setUnreadBoundary] = useState<UnreadBoundary | null>(null);
   const capturedUnreadRef = useRef(false);
   const unreadBoundaryRef = useRef<UnreadBoundary | null>(null);
@@ -287,6 +294,33 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const readSyncRef = useRef(false);
   const pendingReadMessageIdsRef = useRef(new Set<string>());
   const hasSentTypingRef = useRef(false);
+
+  const closeSidebar = useCallback(() => setIsSidebarOpen(false), []);
+
+  useEffect(() => {
+    if (!isMoreMenuOpen) return;
+    moreMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const pointerdown = (event: PointerEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node) && !moreButtonRef.current?.contains(event.target as Node)) setIsMoreMenuOpen(false);
+    };
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsMoreMenuOpen(false);
+        moreButtonRef.current?.focus();
+      }
+      const items = [...(moreMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      if (current < 0 || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const index = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 :
+        (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[index]?.focus();
+    };
+    document.addEventListener("pointerdown", pointerdown);
+    document.addEventListener("keydown", keydown);
+    return () => { document.removeEventListener("pointerdown", pointerdown); document.removeEventListener("keydown", keydown); };
+  }, [isMoreMenuOpen]);
 
   useLayoutEffect(() => {
     messagesRef.current = messages;
@@ -1268,73 +1302,101 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     setEditing(message);
   }
 
+  function openHistory() {
+    setIsSidebarOpen(false);
+    setIsMoreMenuOpen(false);
+    setCallPanelRequest(current => ({ id: (current?.id ?? 0) + 1, view: "history" }));
+  }
+
+  function openImages() {
+    setIsSidebarOpen(false);
+    setIsMoreMenuOpen(false);
+    setIsGalleryOpen(true);
+  }
+
+  function openSearch() {
+    setIsSidebarOpen(false);
+    setIsMoreMenuOpen(false);
+    setIsSearchOpen(true);
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }
+
+  function closeSearch() {
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchError(null);
+  }
+
+  const latestMessage = messages.at(-1);
+
   return (
-    <main className="flex h-dvh flex-col bg-paper text-ink">
+    <div className="chat-shell flex h-dvh overflow-hidden bg-paper text-ink">
       <BrowserChatStatus unreadCount={unreadIncomingMessages.length} mentionSender={unreadMentionSender} members={members} />
+      <ChatSidebar
+        identity={getSenderLabel(sender, members)}
+        memberCount={members.length}
+        lastMessageTime={latestMessage ? formatMessageTime(latestMessage.createdAt) : null}
+        unreadCount={unreadIncomingMessages.length}
+        isAtBottom={isAtBottom}
+        isOpen={isSidebarOpen}
+        onClose={closeSidebar}
+        onShowChat={closeSidebar}
+        onShowHistory={openHistory}
+        onShowImages={openImages}
+        onSearch={openSearch}
+        onLatest={() => { closeSidebar(); scrollToLatest(); }}
+        onSwitchIdentity={onSwitchIdentity}
+      />
 
-      <header className="relative z-30 border-b border-line bg-white/95 px-3 py-3 backdrop-blur sm:px-5">
-        <div className="mx-auto grid max-w-5xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:gap-4">
-          <button
-            type="button"
-            onClick={onSwitchIdentity}
-            className="icon-button sm:!w-auto sm:gap-2 sm:px-3"
-            title="換身分"
-            aria-label="換身分"
-          >
-            <ArrowLeft size={17} />
-            <span className="hidden text-sm sm:inline">換身分</span>
-          </button>
-
-          <div className="min-w-0 justify-self-center text-center">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="relative z-30 shrink-0 border-b border-line bg-white px-3 sm:px-7 xl:px-10">
+        <div className="flex h-20 items-center gap-2 sm:gap-4 md:h-24">
+          <button type="button" onClick={() => setIsSidebarOpen(true)} className="icon-button lg:hidden" title="開啟導覽" aria-label="開啟導覽" aria-expanded={isSidebarOpen}><Menu size={21} strokeWidth={1.8} /></button>
+          <div className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 sm:flex"><Users size={25} strokeWidth={1.6} /></div>
+          <div className="min-w-0 flex-1">
             {sender === ADMIN_SENDER_ID ? (
               <button
                 type="button"
                 onClick={() => setIsSnakeGateOpen(true)}
-                className="inline-flex max-w-full items-center justify-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+                className="block max-w-full truncate rounded-sm text-left text-base font-semibold leading-7 outline-none focus-visible:ring-2 focus-visible:ring-brand/30 sm:text-lg"
                 aria-label="開啟 trashchat"
-              ><Trash2 size={18} className="hidden shrink-0 text-brand sm:block" /><span className="truncate text-lg font-semibold leading-7">trashchat</span></button>
+              >trashchat</button>
             ) : (
-              <h1 className="flex items-center justify-center gap-2 truncate text-lg font-semibold"><Trash2 size={18} className="hidden shrink-0 text-brand sm:block" />trashchat</h1>
+              <h1 className="truncate text-base font-semibold leading-7 sm:text-lg">trashchat</h1>
             )}
-            <p className="truncate text-[11px] text-slate-400">你是 <span className="font-medium text-slate-600">{getSenderLabel(sender, members)}</span></p>
+            <p className="truncate text-xs text-slate-500">你是 {getSenderLabel(sender, members)}<span className="hidden sm:inline"> · {members.length} 位成員</span></p>
           </div>
 
-          <div className="flex items-center gap-1 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-0.5 sm:gap-3">
+            <VoiceCall sender={sender} members={members} openRequest={callPanelRequest} />
             <button
               type="button"
-              onClick={() => {
-                const nextIsSearchOpen = !isSearchOpen;
-                setIsSearchOpen(nextIsSearchOpen);
-
-                if (!nextIsSearchOpen) {
-                  setSearchQuery("");
-                  setSearchResults([]);
-                  setSearchError(null);
-                }
-              }}
+              onClick={() => isSearchOpen ? closeSearch() : openSearch()}
               className={`icon-button ${isSearchOpen ? "!bg-brand/10 !text-brand" : ""}`}
               title="搜尋訊息"
               aria-label="搜尋訊息"
+              aria-expanded={isSearchOpen}
             >
-              {isSearchOpen ? <X size={17} /> : <Search size={17} />}
+              {isSearchOpen ? <X size={21} /> : <Search size={21} strokeWidth={1.8} />}
             </button>
-            <button type="button" onClick={() => setIsGalleryOpen(true)} className="icon-button" title="聊天圖片" aria-label="聊天圖片"><Images size={18} /></button>
-            <VoiceCall sender={sender} members={members} />
-            <button
-              type="button"
-              onClick={() => void loadMessages()}
-              className="icon-button hidden sm:inline-flex"
-              title="重新整理"
-              aria-label="重新整理"
-            >
-              <RefreshCw size={17} />
-            </button>
+            <div className="relative">
+              <button ref={moreButtonRef} type="button" onClick={() => setIsMoreMenuOpen(current => !current)} className="icon-button" title="更多選項" aria-label="更多選項" aria-haspopup="menu" aria-expanded={isMoreMenuOpen}><MoreHorizontal size={23} /></button>
+              {isMoreMenuOpen ? <div ref={moreMenuRef} role="menu" aria-label="聊天選項" className="absolute right-0 top-[calc(100%+0.75rem)] z-40 w-48 rounded-lg border border-line bg-white p-1.5 shadow-soft">
+                <button type="button" role="menuitem" onClick={openHistory} className="sidebar-link !min-h-10 !gap-3 !px-3 !py-2"><History size={17} />通話紀錄</button>
+                <button type="button" role="menuitem" onClick={openImages} className="sidebar-link !min-h-10 !gap-3 !px-3 !py-2"><Images size={17} />聊天圖片</button>
+                <button type="button" role="menuitem" onClick={() => { setIsMoreMenuOpen(false); void loadMessages().catch(() => setError("無法載入訊息")); }} className="sidebar-link !min-h-10 !gap-3 !px-3 !py-2"><RefreshCw size={17} />重新整理</button>
+                <div className="my-1 border-t border-line" />
+                <button type="button" role="menuitem" onClick={onSwitchIdentity} className="sidebar-link !min-h-10 !gap-3 !px-3 !py-2"><LogOut size={17} />換身分</button>
+              </div> : null}
+            </div>
           </div>
         </div>
         {isSearchOpen ? (
-          <div className="mx-auto mt-3 max-w-5xl">
+          <div className="pb-4">
             <div className="relative">
               <input
+                ref={searchInputRef}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 autoFocus
@@ -1393,7 +1455,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
           tabIndex={0}
           aria-label="聊天訊息"
           style={{ overflowAnchor: "none" }}
-          className="chat-scrollbar relative mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col overflow-y-auto px-3 py-5 sm:px-5"
+          className="chat-scrollbar relative flex h-full min-h-0 w-full flex-col overflow-y-auto px-4 py-6 sm:px-7 xl:px-20 2xl:px-24"
         >
           {isLoading ? (
             <div className="flex flex-1 items-center justify-center">
@@ -1424,7 +1486,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
 
                   return (
                     <MeasuredMessage key={message.id} messageId={message.id} onHeightChange={handleMessageHeightChange}>
-                      {showDay ? <div className="flex justify-center pb-5 pt-2"><time dateTime={message.createdAt} className="rounded-md bg-white/80 px-3 py-1 text-[11px] font-medium text-slate-400">{new Date(message.createdAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", weekday: "short" })}</time></div> : null}
+                      {showDay ? <div className="flex justify-center pb-7 pt-2"><time dateTime={message.createdAt} className="text-xs text-slate-400">{new Date(message.createdAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", weekday: "short" })}</time></div> : null}
                       {unreadBoundary?.id === message.id ? <div role="separator" aria-label="未讀訊息" className="mb-5 mt-2 flex items-center gap-4"><span className="h-px flex-1 bg-brand/20" /><span className="shrink-0 text-[11px] font-semibold text-brand">以下為未讀訊息</span><span className="h-px flex-1 bg-brand/20" /></div> : null}
                       <MessageBubble
                         message={message}
@@ -1463,7 +1525,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         </section>
         {showJumpToLatest ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20">
-            <div className="mx-auto flex max-w-5xl justify-end px-3 sm:px-5">
+            <div className="flex justify-end px-4 sm:px-7 xl:px-20 2xl:px-24">
               <button
                 type="button"
                 onClick={scrollToLatest}
@@ -1494,6 +1556,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         onTypingActivity={handleTypingActivity}
         onSubmit={handleSubmit}
       />
+      </main>
 
       {isAdminOpen ? (
         <MemberAdminPanel members={members} onMembersChange={onMembersChange} onClose={() => setIsAdminOpen(false)} />
@@ -1516,6 +1579,6 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         initialIndex={lightboxImages?.index ?? 0}
         onClose={() => setLightboxImages(null)}
       />
-    </main>
+    </div>
   );
 }

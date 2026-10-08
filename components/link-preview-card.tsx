@@ -137,7 +137,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
         href={preview.url}
         target="_blank"
         rel="noreferrer"
-        className="mt-2 block w-[min(70vw,420px)] overflow-hidden rounded-lg bg-white text-ink shadow-sm transition hover:brightness-95"
+        className="mt-2 block w-[min(70vw,420px)] max-w-full overflow-hidden rounded-lg bg-white text-ink shadow-sm transition hover:brightness-95"
       >
         {preview.image ? (
           <img
@@ -152,7 +152,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
         <div className="space-y-1 p-3">
           {preview.title ? <p className="line-clamp-2 text-sm font-semibold leading-5">{preview.title}</p> : null}
           {preview.description ? <p className="line-clamp-2 text-xs leading-5 text-slate-600">{preview.description}</p> : null}
-          {preview.siteName ? <p className="truncate text-xs uppercase tracking-wide text-slate-500">{preview.siteName}</p> : null}
+          {preview.siteName ? <p className="truncate text-xs uppercase text-slate-500">{preview.siteName}</p> : null}
         </div>
       </a>
     </div>
