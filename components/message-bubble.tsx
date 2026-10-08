@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import clsx from "clsx";
-import { MoreHorizontal } from "lucide-react";
+import { CheckCheck, MoreHorizontal, Pencil, Reply, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { LinkifiedText } from "@/components/linkified-text";
 import { LinkPreviewCard } from "@/components/link-preview-card";
@@ -46,7 +46,7 @@ function MessageImageStack({ imageUrls, thumbnailUrls, isOwn, senderLabel, onOpe
       <button
         type="button"
         onClick={() => onOpenImages(imageUrls, 0)}
-        className="mb-2 block overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
+        className="mb-2 block max-w-full overflow-hidden rounded-md bg-black/5 focus:outline-none focus:ring-4 focus:ring-brand/20"
         aria-label="開啟圖片預覽"
       >
         <img
@@ -54,51 +54,21 @@ function MessageImageStack({ imageUrls, thumbnailUrls, isOwn, senderLabel, onOpe
           alt="聊天圖片"
           loading="lazy"
           decoding="async"
-          className="h-[220px] w-[min(70vw,360px)] rounded-md object-contain sm:h-[240px]"
+          className="h-[220px] w-[min(70vw,360px)] max-w-full rounded-md object-contain sm:h-[240px]"
         />
       </button>
     );
   }
 
-  const visibleBackCards = Math.min(imageUrls.length - 1, 3);
-  const previewUrl = previewUrls[0] ?? imageUrls[0];
-
   return (
     <div className="mb-2">
-      <p className={clsx("mb-1 px-1 text-sm", isOwn ? "text-white/90" : "text-slate-600")}>
-        {senderLabel}傳送了 {imageUrls.length} 張相片
-      </p>
-      <button
-        type="button"
-        onClick={() => onOpenImages(imageUrls, 0)}
-        className="relative block h-[220px] w-[min(70vw,260px)] focus:outline-none focus:ring-4 focus:ring-brand/20 sm:h-[240px] sm:w-[280px]"
-        aria-label={`開啟 ${imageUrls.length} 張相片`}
-      >
-        {Array.from({ length: visibleBackCards }).map((_, index) => (
-          <span
-            key={index}
-            className="absolute inset-0 rounded-lg border border-white/70 bg-green-500 shadow-sm"
-            style={{
-              transform: `translate(${(visibleBackCards - index) * 8}px, -${(visibleBackCards - index) * 7}px) rotate(${
-                4 - index * 2
-              }deg)`,
-              opacity: 0.78 - index * 0.12
-            }}
-          />
-        ))}
-        <span className="absolute inset-0 overflow-hidden rounded-lg border border-white/80 bg-green-500 p-2 shadow-sm">
-          <img
-            src={previewUrl}
-            alt="相片堆疊預覽"
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full rounded-md object-contain"
-          />
-        </span>
-        <span className="absolute bottom-2 right-2 rounded-md bg-black/65 px-2 py-1 text-xs font-semibold text-white">
-          +{imageUrls.length - 1}
-        </span>
-      </button>
+      <div className={clsx("grid h-[220px] w-[min(63vw,320px)] max-w-full grid-cols-2 gap-1.5 sm:h-[240px]", imageUrls.length >= 3 ? "grid-rows-2" : "grid-rows-1")}>
+        {imageUrls.slice(0, 4).map((url, index) => <button key={`${url}-${index}`} type="button" onClick={() => onOpenImages(imageUrls, index)} aria-label={`開啟 ${senderLabel} 的第 ${index + 1} 張圖片`} className={clsx("relative min-h-0 overflow-hidden rounded-md bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand", imageUrls.length === 3 && index === 2 && "col-span-2")}>
+          <img src={previewUrls[index] || url} alt="聊天圖片" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+          {index === 3 && imageUrls.length > 4 ? <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-xl font-medium text-white">+{imageUrls.length - 4}</span> : null}
+        </button>)}
+      </div>
+      <p className={clsx("mt-1.5 text-[11px]", isOwn ? "text-white/65" : "text-slate-400")}>{imageUrls.length} 張圖片</p>
     </div>
   );
 }
@@ -169,11 +139,11 @@ export function MessageBubble({
         isHighlighted && "rounded-lg bg-yellow-100/70 py-2"
       )}
     >
-      <div className={clsx("flex max-w-[90%] items-end gap-2 sm:max-w-[78%]", isOwn && "flex-row-reverse")}>
+      <div className={clsx("flex max-w-[94%] items-end gap-1.5 sm:max-w-[80%] sm:gap-2", isOwn && "flex-row-reverse")}>
         <div className={clsx("flex min-w-0 flex-col gap-1", isOwn ? "items-end" : "items-start")}>
           {showMeta ? (
-            <div className={clsx("flex items-center gap-2 text-xs text-slate-500", isOwn && "flex-row-reverse")}>
-              {showTimestamp ? <span>{isOwn ? "你" : getSenderLabel(message.sender, members)}</span> : null}
+            <div className={clsx("flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5 text-[11px] text-slate-400", isOwn && "flex-row-reverse")}>
+              {showTimestamp ? <span className="font-semibold text-slate-600">{isOwn ? "你" : getSenderLabel(message.sender, members)}</span> : null}
               {showTimestamp ? <span>{formatMessageTime(message.createdAt)}</span> : null}
               {message.editedAt && !isRecalled ? <span>已編輯</span> : null}
               {message.clientStatus === "sending" ? <span>傳送中</span> : null}
@@ -183,8 +153,8 @@ export function MessageBubble({
 
           <div
             className={clsx(
-              "rounded-lg px-3 py-2 shadow-sm",
-              isOwn ? "bg-brand text-white" : "bg-white text-ink",
+              "max-w-full rounded-lg border px-3.5 py-2.5 shadow-[0_1px_2px_rgba(32,39,41,0.03)]",
+              isOwn ? "border-brand bg-brand text-white" : "border-line/80 bg-white text-ink",
               message.clientStatus === "sending" && "opacity-75",
               message.clientStatus === "failed" && "border border-red-200 bg-red-50 text-red-700",
               isRecalled && "border border-dashed border-slate-300 bg-transparent text-slate-500 shadow-none"
@@ -233,7 +203,8 @@ export function MessageBubble({
             {!hasVisibleContent && !isRecalled ? <p className="text-sm text-slate-400">空訊息</p> : null}
           </div>
           {readByLabels ? (
-            <div className={clsx("px-1 text-xs text-slate-500", isOwn ? "text-right" : "text-left")}>
+            <div className={clsx("flex max-w-full flex-wrap items-center gap-1 px-1 text-[10px] text-slate-400", isOwn ? "justify-end text-right" : "text-left")}>
+              {readByLabels.length > 0 ? <CheckCheck size={12} className="shrink-0 text-brand/70" /> : null}
               {readByLabels.length > 0 ? `已讀 ${readByLabels.join("、")}` : "未讀"}
             </div>
           ) : null}
@@ -257,6 +228,7 @@ export function MessageBubble({
               }}
               className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-800"
               aria-label="訊息操作"
+              title="訊息操作"
             >
               <MoreHorizontal size={15} />
             </button>
@@ -271,26 +243,26 @@ export function MessageBubble({
                 <button
                   type="button"
                   onClick={() => runAction(onReply)}
-                  className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-50"
                 >
-                  回覆
+                  <Reply size={14} />回覆
                 </button>
                 {editable ? (
                   <button
                     type="button"
                     onClick={() => runAction(onEdit)}
-                    className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-50"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-50"
                   >
-                    編輯
+                    <Pencil size={14} />編輯
                   </button>
                 ) : null}
                 {isOwn && !isRecalled ? (
                   <button
                     type="button"
                     onClick={() => runAction(onRecall)}
-                    className="block w-full rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-red-600 hover:bg-red-50"
                   >
-                    收回
+                    <Undo2 size={14} />收回
                   </button>
                 ) : null}
               </div>

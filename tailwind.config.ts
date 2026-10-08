@@ -5,10 +5,10 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#111827",
-        paper: "#f7f7fb",
-        line: "#e5e7eb",
-        brand: "#0a7cff"
+        ink: "#202729",
+        paper: "#f4f6f7",
+        line: "#e3e8e8",
+        brand: "#18765f"
       },
       boxShadow: {
         soft: "0 18px 60px rgba(17, 24, 39, 0.12)"

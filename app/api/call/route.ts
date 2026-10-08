@@ -7,11 +7,13 @@ import { getMembers } from "@/lib/members";
 import { PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
 import { triggerRealtimeEvent } from "@/lib/pusher-server";
 import type { Sender } from "@/lib/types";
+import type { CallSignal } from "@/lib/call";
+import { CallHistoryError, isCallHistorySignal, recordCallSignal } from "@/lib/call-history";
 
 export const runtime = "nodejs";
 
 const callSignalSchema = z.object({
-  type: z.enum(["call-request", "call-accept", "call-reject", "offer", "answer", "ice-candidate", "hangup"]),
+  type: z.enum(["call-request", "call-accept", "call-reject", "call-connected", "call-heartbeat", "offer", "answer", "ice-candidate", "hangup"]),
   callId: z.string().min(8).max(120),
   from: z.string().trim().min(1).max(120),
   to: z.string().trim().min(1).max(120),
@@ -109,15 +111,34 @@ export async function POST(request: Request) {
   }
 
   const payload = toJsonPayload(parsed.data.payload);
-  const signal = await prisma.callSignal.create({
-    data: {
-      type: parsed.data.type,
-      callId: parsed.data.callId,
-      from: parsed.data.from,
-      to: parsed.data.to,
-      ...(payload === undefined ? {} : { payload })
+  const signalData = { type: parsed.data.type, callId: parsed.data.callId, from: parsed.data.from, to: parsed.data.to,
+    ...(payload === undefined ? {} : { payload }) };
+  let signal;
+  try {
+    if (isCallHistorySignal(parsed.data.type)) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          signal = await prisma.$transaction(async (db) => {
+            await recordCallSignal(db, parsed.data as CallSignal);
+            // Heartbeats keep durable history accurate without filling the signalling table.
+            if (parsed.data.type === "call-heartbeat") return null;
+            return db.callSignal.create({ data: signalData });
+          }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+          break;
+        } catch (error) {
+          if (attempt < 2 && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") continue;
+          throw error;
+        }
+      }
+    } else {
+      signal = await prisma.callSignal.create({ data: signalData });
     }
-  });
+  } catch (error) {
+    if (error instanceof CallHistoryError) return NextResponse.json({ error: error.message }, { status: 400 });
+    console.error("Call signal could not be saved", error);
+    return NextResponse.json({ error: "通話暫時無法使用，請確認資料庫已更新。" }, { status: 503 });
+  }
+  if (!signal) return NextResponse.json({ ok: true });
   const serializedSignal = serializeSignal(signal);
   let didTrigger = false;
 

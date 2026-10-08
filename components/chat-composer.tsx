@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { AtSign, ImagePlus, Send, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getMentionToken } from "@/lib/mentions";
 import { getReplyPreview } from "@/lib/messages";
 import { type Member, type Message, type Sender } from "@/lib/types";
@@ -49,6 +49,13 @@ export function ChatComposer({
     () => members.filter((member) => member.id !== currentSender),
     [currentSender, members]
   );
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(144, Math.max(44, textarea.scrollHeight))}px`;
+  }, [text]);
 
   useEffect(() => {
     if (editing) {
@@ -140,7 +147,7 @@ export function ChatComposer({
   }
 
   return (
-    <footer className="border-t border-line bg-white px-3 py-3 sm:px-5">
+    <footer className="border-t border-line bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pt-3">
       <div className="mx-auto max-w-5xl">
         {replyTo ? (
           <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-line bg-slate-50 px-3 py-2">
@@ -225,9 +232,9 @@ export function ChatComposer({
         ) : null}
 
         {!editing ? (
-          <div className="mb-2 flex items-center gap-2">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-slate-500">
-              <AtSign size={16} />
+          <div className="mb-1.5 flex items-center gap-1.5 px-1">
+            <span className="inline-flex h-7 w-6 shrink-0 items-center justify-center text-slate-400">
+              <AtSign size={14} />
             </span>
             <div className="flex min-w-0 gap-1.5 overflow-x-auto">
               {mentionTargets.map((target) => (
@@ -235,7 +242,7 @@ export function ChatComposer({
                   key={target.id}
                   type="button"
                   onClick={() => insertMention(target.id)}
-                  className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-line bg-white px-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand/40 hover:bg-brand/5 hover:text-brand focus:outline-none focus:ring-4 focus:ring-brand/15"
+                  className="inline-flex h-7 shrink-0 items-center justify-center rounded px-2 text-xs font-medium text-slate-500 transition hover:bg-brand/5 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/20"
                 >
                   @{target.name}
                 </button>
@@ -244,7 +251,7 @@ export function ChatComposer({
           </div>
         ) : null}
 
-        <form onSubmit={handleSubmit} className="flex items-end gap-2">
+        <form onSubmit={handleSubmit} className="flex items-end gap-1 rounded-lg border border-line bg-paper p-1.5 transition focus-within:border-brand/40 focus-within:bg-white focus-within:shadow-[0_0_0_3px_rgba(24,118,95,0.06)]">
           <input
             ref={fileInputRef}
             type="file"
@@ -262,7 +269,8 @@ export function ChatComposer({
             type="button"
             disabled={Boolean(editing)}
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="icon-button !h-11 !w-10"
+            title="上傳圖片"
             aria-label="上傳圖片"
           >
             <ImagePlus size={20} />
@@ -291,8 +299,10 @@ export function ChatComposer({
             }}
             rows={1}
             placeholder={editing ? "修改訊息內容" : "輸入訊息"}
-            className="max-h-36 min-h-11 flex-1 resize-none rounded-lg border border-line bg-slate-50 px-4 py-3 text-base leading-5 outline-none transition placeholder:text-slate-400 focus:border-brand focus:bg-white focus:ring-4 focus:ring-brand/10"
+            aria-label="訊息內容"
+            className="max-h-36 min-h-11 min-w-0 flex-1 resize-none border-0 bg-transparent px-2 py-3 text-base leading-5 outline-none placeholder:text-slate-400"
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
@@ -303,7 +313,8 @@ export function ChatComposer({
           <button
             type="submit"
             disabled={!canSubmit}
-            className="inline-flex h-11 min-w-11 shrink-0 items-center justify-center rounded-md bg-brand px-4 font-semibold text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-brand font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            title={editing ? "儲存編輯" : "送出訊息"}
             aria-label={editing ? "儲存編輯" : "送出訊息"}
           >
             {editing && isSending ? "..." : <Send size={18} />}

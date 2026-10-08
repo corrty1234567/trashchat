@@ -132,7 +132,7 @@ test("expired website sessions are replaced on homepage entry without prompting 
 test("all API paths reject direct access, including valid Basic credentials without website entry", () => {
   const paths = ["/api/messages", "/api/messages/search?q=hello", "/api/messages/example",
     "/api/messages/read", "/api/members", "/api/upload", "/api/media/example",
-    "/api/call", "/api/typing", "/api/realtime/auth", "/api/admin/messages",
+    "/api/call", "/api/call/history?sender=CHEN", "/api/images", "/api/typing", "/api/realtime/auth", "/api/admin/messages",
     "/api/admin/database-usage", "/api/admin/blob-usage", "/api/link-preview"];
   for (const path of paths) {
     assert.equal(proxy(request(path)).status, 401, path);
@@ -186,7 +186,7 @@ test("API handlers independently reject unauthenticated requests before reading 
     "@vercel/blob": { get: forbidden, put: forbidden, list: forbidden, del: forbidden }
   };
   const routes = ["messages", "messages/[id]", "messages/search", "messages/read", "members",
-    "members/[id]", "typing", "call", "upload", "media/[id]", "link-preview", "realtime/auth",
+    "members/[id]", "typing", "call", "call/history", "images", "upload", "media/[id]", "link-preview", "realtime/auth",
     "admin/session", "admin/messages", "admin/messages/[id]/recall", "admin/database-usage", "admin/blob-usage", "admin/cleanup"];
   for (const path of routes) {
     const route = loadModule(`app/api/${path}/route.ts`, mocks);

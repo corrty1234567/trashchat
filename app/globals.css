@@ -17,14 +17,17 @@ body {
 
 body {
   margin: 0;
-  background: #f7f7fb;
-  color: #111827;
+  background: #f4f6f7;
+  color: #202729;
   font-family:
     Inter,
     ui-sans-serif,
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
+    "PingFang TC",
+    "Microsoft JhengHei",
+    "Noto Sans TC",
     "Segoe UI",
     sans-serif;
 }
@@ -40,7 +43,25 @@ button {
 }
 
 ::selection {
-  background: rgba(10, 124, 255, 0.18);
+  background: rgba(24, 118, 95, 0.18);
+}
+
+@layer components {
+  .icon-button {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10;
+  }
+
+  .lightbox-button {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-white/80 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-not-allowed disabled:opacity-30;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .chat-scrollbar {

@@ -1,9 +1,10 @@
 "use client";
 
 import clsx from "clsx";
-import { Loader2, Mic, MicOff, Phone, PhoneCall, PhoneOff, X } from "lucide-react";
+import { History, Loader2, Mic, MicOff, Phone, PhoneCall, PhoneOff, X } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CallSignal, CallSignalType } from "@/lib/call";
+import { formatCallDuration, type CallSignal, type CallSignalType } from "@/lib/call";
 import { PUSHER_EVENT_CALL_SIGNAL } from "@/lib/realtime";
 import { connectPrivateRealtime } from "@/lib/pusher-client";
 import { getSenderLabel, type Member, type Sender } from "@/lib/types";
@@ -28,6 +29,7 @@ const SIGNAL_INITIAL_CONFIGURED_POLLING_DELAY_MS = 4000;
 const SIGNAL_BACKGROUND_POLLING_INTERVAL_MS = 30000;
 const SIGNAL_POLLING_LOOKBACK_MS = 1500;
 const OUTGOING_CALL_TIMEOUT_MS = 45000;
+const CallHistoryPanel = dynamic(() => import("@/components/call-history-panel").then(module => module.CallHistoryPanel), { ssr: false });
 
 function createCallId() {
   if (globalThis.crypto?.randomUUID) {
@@ -48,6 +50,10 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
   const [error, setError] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [panelView, setPanelView] = useState<"dial" | "history">("dial");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const connectedCallIdRef = useRef<string | null>(null);
   const statusRef = useRef(status);
   const activePeerRef = useRef<Sender | null>(activePeer);
   const callIdRef = useRef<string | null>(null);
@@ -237,6 +243,9 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
     setActivePeer(null);
     setStatus("idle");
     setIsMuted(false);
+    connectedCallIdRef.current = null;
+    setConnectedAt(null);
+    setElapsedSeconds(0);
   }, [clearOutgoingTimeout, stopRingtone]);
 
   const closePanel = useCallback(() => {
@@ -257,7 +266,9 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
       throw new Error("這個瀏覽器不支援語音通話。");
     }
 
-    localStreamPromiseRef.current ??= navigator.mediaDevices
+    if (!localStreamPromiseRef.current) {
+      const requestedCallId = callIdRef.current;
+      const promise = navigator.mediaDevices
       .getUserMedia({
         audio: {
           echoCancellation: true,
@@ -267,12 +278,18 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
         video: false
       })
       .then((stream) => {
+        if (callIdRef.current !== requestedCallId) {
+          stream.getTracks().forEach(track => track.stop());
+          throw new DOMException("Call cancelled", "AbortError");
+        }
         localStreamRef.current = stream;
         return stream;
       })
       .finally(() => {
-        localStreamPromiseRef.current = null;
+        if (localStreamPromiseRef.current === promise) localStreamPromiseRef.current = null;
       });
+      localStreamPromiseRef.current = promise;
+    }
 
     return localStreamPromiseRef.current;
   }, []);
@@ -318,7 +335,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           void remoteAudioRef.current.play().catch(() => undefined);
         }
 
-        setStatus("active");
+        if (peerConnection.connectionState === "connected") setStatus("active");
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -326,7 +343,17 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           return;
         }
 
+        const peer = activePeerRef.current;
+        if (peerConnection.connectionState === "connected") {
+          setStatus("active");
+          if (connectedCallIdRef.current !== nextCallId && peer) {
+            connectedCallIdRef.current = nextCallId;
+            setConnectedAt(Date.now());
+            void sendSignal("call-connected", nextCallId, peer).catch(() => undefined);
+          }
+        }
         if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
+          if (peer) void sendSignal("hangup", nextCallId, peer, { reason: "failed" }).catch(() => undefined);
           cleanupCall();
           setIsPanelOpen(true);
           setError("語音連線中斷，請重新撥打。");
@@ -361,7 +388,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           return;
         }
 
-        void sendSignal("hangup", nextCallId, peer).catch(() => undefined);
+        void sendSignal("hangup", nextCallId, peer, { reason: "missed" }).catch(() => undefined);
         cleanupCall();
         setIsPanelOpen(true);
         setError(`${getSenderLabel(peer, members)} 沒有回應。`);
@@ -378,6 +405,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
 
       setError(null);
       setIsPanelOpen(true);
+      setPanelView("dial");
       setActivePeer(peer);
       activePeerRef.current = peer;
 
@@ -388,9 +416,11 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
 
       try {
         await sendSignal("call-request", nextCallId, peer);
+        if (callIdRef.current !== nextCallId) return;
         await getLocalStream();
       } catch (callError) {
-        await sendSignal("hangup", nextCallId, peer).catch(() => undefined);
+        if (callIdRef.current !== nextCallId) return;
+        await sendSignal("hangup", nextCallId, peer, { reason: "failed" }).catch(() => undefined);
         cleanupCall();
         setIsPanelOpen(true);
         setError(callError instanceof Error ? callError.message : "無法開始語音通話。");
@@ -413,9 +443,11 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
     try {
       const peerConnection = createPeerConnection(activeCallId);
       await addLocalTracks(peerConnection);
+      if (callIdRef.current !== activeCallId) return;
       await sendSignal("call-accept", activeCallId, peer);
     } catch (callError) {
-      await sendSignal("hangup", activeCallId, peer).catch(() => undefined);
+      if (callIdRef.current !== activeCallId) return;
+      await sendSignal("hangup", activeCallId, peer, { reason: "failed" }).catch(() => undefined);
       cleanupCall();
       setIsPanelOpen(true);
       setError(callError instanceof Error ? callError.message : "無法接聽語音通話。");
@@ -426,26 +458,20 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
     const activeCallId = callIdRef.current;
     const peer = activePeerRef.current;
 
-    if (activeCallId && peer) {
-      await sendSignal("call-reject", activeCallId, peer).catch(() => undefined);
-    }
-
     cleanupCall();
     setError(null);
     setIsPanelOpen(false);
+    if (activeCallId && peer) await sendSignal("call-reject", activeCallId, peer).catch(() => undefined);
   }, [cleanupCall, sendSignal]);
 
   const hangUp = useCallback(async () => {
     const activeCallId = callIdRef.current;
     const peer = activePeerRef.current;
 
-    if (activeCallId && peer) {
-      await sendSignal("hangup", activeCallId, peer).catch(() => undefined);
-    }
-
     cleanupCall();
     setError(null);
     setIsPanelOpen(false);
+    if (activeCallId && peer) await sendSignal("hangup", activeCallId, peer).catch(() => undefined);
   }, [cleanupCall, sendSignal]);
 
   const toggleMute = useCallback(() => {
@@ -488,7 +514,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
 
       if (signal.type === "call-request") {
         if (statusRef.current !== "idle") {
-          await sendSignal("call-reject", signal.callId, signal.from).catch(() => undefined);
+          await sendSignal("call-reject", signal.callId, signal.from, { reason: "busy" }).catch(() => undefined);
           return;
         }
 
@@ -532,7 +558,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           await peerConnection.setLocalDescription(offer);
           await sendSignal("offer", signal.callId, peer, { offer });
         } catch (callError) {
-          await sendSignal("hangup", signal.callId, peer).catch(() => undefined);
+          await sendSignal("hangup", signal.callId, peer, { reason: "failed" }).catch(() => undefined);
           cleanupCall();
           setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
@@ -552,7 +578,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           await sendSignal("answer", signal.callId, peer, { answer });
           setStatus("connecting");
         } catch (callError) {
-          await sendSignal("hangup", signal.callId, peer).catch(() => undefined);
+          await sendSignal("hangup", signal.callId, peer, { reason: "failed" }).catch(() => undefined);
           cleanupCall();
           setIsPanelOpen(true);
           setError(callError instanceof Error ? callError.message : "語音通話連線失敗。");
@@ -566,7 +592,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
         if (peerConnection) {
           await peerConnection.setRemoteDescription(signal.payload.answer).catch(() => undefined);
           await addPendingCandidates();
-          setStatus("active");
+          setStatus(peerConnection.connectionState === "connected" ? "active" : "connecting");
         }
         return;
       }
@@ -736,10 +762,34 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
   }, [pusherCluster, pusherKey, receiveSignal, sender]);
 
   useEffect(() => {
+    if (status !== "active" || !connectedAt) return;
+    const tick = () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - connectedAt) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    const heartbeat = window.setInterval(() => {
+      const id = callIdRef.current;
+      const peer = activePeerRef.current;
+      if (id && peer) void sendSignal("call-heartbeat", id, peer).catch(() => undefined);
+    }, 20_000);
+    return () => { window.clearInterval(timer); window.clearInterval(heartbeat); };
+  }, [status, connectedAt, sendSignal]);
+
+  useEffect(() => {
+    const finish = () => {
+      const id = callIdRef.current;
+      const peer = activePeerRef.current;
+      if (id && peer) void fetch("/api/call", {
+        method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+        body: JSON.stringify({ type: "hangup", callId: id, from: sender, to: peer, payload: { reason: "failed" } })
+      }).catch(() => undefined);
+    };
+    window.addEventListener("pagehide", finish);
     return () => {
+      window.removeEventListener("pagehide", finish);
+      finish();
       cleanupCall();
     };
-  }, [cleanupCall]);
+  }, [cleanupCall, sender]);
 
   const showCallPanel = isPanelOpen || status !== "idle" || Boolean(error);
   const activePeerLabel = activePeer ? getSenderLabel(activePeer, members) : null;
@@ -752,7 +802,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           ? "正在建立連線"
           : status === "active"
             ? `與 ${activePeerLabel} 通話中`
-            : "語音通話";
+            : panelView === "history" ? "通話紀錄" : "語音通話";
   const detailText =
     status === "calling"
       ? "等待對方接聽"
@@ -763,8 +813,8 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           : status === "active"
             ? isMuted
               ? "你的麥克風已靜音"
-              : "麥克風已開啟"
-            : "選擇要撥打的身分";
+              : formatCallDuration(elapsedSeconds)
+            : "";
 
   return (
     <>
@@ -772,12 +822,12 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
         type="button"
         onClick={() => setIsPanelOpen(true)}
         className={clsx(
-          "inline-flex h-10 w-10 items-center justify-center rounded-md border transition focus:outline-none focus:ring-4 focus:ring-brand/20",
+          "icon-button",
           status === "active"
             ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
             : status !== "idle"
               ? "border-brand/30 bg-brand/10 text-brand hover:bg-brand/15"
-              : "border-line text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+              : ""
         )}
         aria-label="語音通話"
         title="語音通話"
@@ -788,8 +838,8 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {showCallPanel ? (
-        <div className="fixed right-4 top-20 z-[1000] w-[min(calc(100vw-2rem),390px)] overflow-hidden rounded-lg border border-line bg-white shadow-soft">
-          <div className="border-b border-line bg-slate-50/80 px-4 py-3">
+        <div role="dialog" aria-label="語音通話面板" className="fixed right-3 top-20 z-[1000] max-h-[calc(100dvh-6rem)] w-[min(calc(100vw-1.5rem),390px)] overflow-y-auto rounded-lg border border-line bg-white shadow-soft sm:right-5">
+          <div className="border-b border-line px-4 py-4">
             <div className="flex items-center gap-3">
               <div
                 className={clsx(
@@ -805,7 +855,7 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-ink">{statusText}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">{detailText}</p>
+                {detailText ? <p className="mt-0.5 truncate text-xs tabular-nums text-slate-500">{detailText}</p> : null}
               </div>
               {status === "idle" ? (
                 <button
@@ -821,25 +871,29 @@ export function VoiceCall({ sender, members }: VoiceCallProps) {
           </div>
 
           <div className="p-4">
+            {status === "idle" ? <div role="tablist" aria-label="通話檢視" className="mb-4 grid grid-cols-2 gap-1 rounded-md bg-paper p-1">
+              <button type="button" role="tab" aria-selected={panelView === "dial"} onClick={() => setPanelView("dial")} className={`flex h-9 items-center justify-center gap-2 rounded text-sm ${panelView === "dial" ? "bg-white font-medium text-ink shadow-sm" : "text-slate-500"}`}><Phone size={15} />撥號</button>
+              <button type="button" role="tab" aria-selected={panelView === "history"} onClick={() => setPanelView("history")} className={`flex h-9 items-center justify-center gap-2 rounded text-sm ${panelView === "history" ? "bg-white font-medium text-ink shadow-sm" : "text-slate-500"}`}><History size={15} />紀錄</button>
+            </div> : null}
             {error ? (
               <div className="mb-3 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {error}
               </div>
             ) : null}
 
-            {status === "idle" ? (
+            {status === "idle" && panelView === "history" ? <CallHistoryPanel sender={sender} members={members} onCall={peer => void startCall(peer)} /> : status === "idle" ? (
               <div className="grid grid-cols-2 gap-2">
                 {peerOptions.map((peer) => (
                   <button
                     key={peer.id}
                     type="button"
                     onClick={() => void startCall(peer.id)}
-                    className="group flex min-h-20 flex-col items-start justify-between rounded-md border border-line bg-white p-3 text-left transition hover:border-brand/40 hover:bg-brand/5 focus:outline-none focus:ring-4 focus:ring-brand/15"
+                    className="group flex min-h-20 min-w-0 items-center justify-between gap-2 rounded-md border border-line bg-white p-3 text-left transition hover:border-brand/40 hover:bg-brand/5 focus:outline-none focus:ring-4 focus:ring-brand/15"
                   >
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-sm font-semibold text-slate-700 transition group-hover:bg-brand group-hover:text-white">
+                    <span className="min-w-0 truncate text-lg font-semibold text-ink" title={peer.name}>
                       {peer.name}
                     </span>
-                    <span className="text-xs font-medium text-slate-500">撥打</span>
+                    <PhoneCall size={17} className="shrink-0 text-brand" />
                   </button>
                 ))}
               </div>

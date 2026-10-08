@@ -67,3 +67,19 @@ model Member {
 
   @@map("members")
 }
+
+model CallRecord {
+  id           String    @id
+  caller       String
+  callee       String
+  startedAt    DateTime  @default(now()) @map("started_at")
+  acceptedAt   DateTime? @map("accepted_at")
+  connectedAt  DateTime? @map("connected_at")
+  endedAt      DateTime? @map("ended_at")
+  endReason    String?   @map("end_reason")
+  lastSeenAt   DateTime  @default(now()) @map("last_seen_at")
+
+  @@index([caller, startedAt, id])
+  @@index([callee, startedAt, id])
+  @@map("call_records")
+}

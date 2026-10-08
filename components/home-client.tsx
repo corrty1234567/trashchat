@@ -110,14 +110,14 @@ export function HomeClient() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_25%,#ffffff_0%,#f1f5f9_42%,#dbeafe_100%)] px-5 py-8 text-ink">
-      <section className="grid w-full max-w-[22rem] grid-cols-1 gap-3 sm:max-w-3xl sm:grid-cols-3 sm:gap-4">
+    <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-paper px-6 py-8 text-ink">
+      <section className="grid w-full max-w-[22rem] grid-cols-1 gap-3 sm:max-w-2xl sm:grid-cols-3 sm:gap-5">
         {members.map((member) => (
           <button
             key={member.id}
             type="button"
             onClick={() => chooseSender(member.id)}
-            className="flex aspect-[2.8/1] min-w-0 items-center justify-center rounded-3xl border border-white/80 bg-white/70 px-4 text-5xl font-semibold text-slate-950 shadow-[0_28px_90px_rgba(15,23,42,0.16)] backdrop-blur-xl transition duration-300 ease-out hover:-translate-y-1 hover:scale-[1.025] hover:border-brand/40 hover:bg-white/95 focus:outline-none focus:ring-4 focus:ring-brand/20 active:scale-[0.98] sm:aspect-square sm:text-7xl"
+            className="flex aspect-[2.8/1] min-w-0 items-center justify-center rounded-lg border border-line bg-white px-4 text-5xl font-semibold text-ink shadow-[0_2px_8px_rgba(32,39,41,0.03)] transition duration-200 ease-out hover:-translate-y-1 hover:border-brand/40 hover:text-brand hover:shadow-[0_12px_30px_rgba(24,118,95,0.08)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/15 active:translate-y-0 sm:aspect-square sm:text-6xl"
             aria-label={`選擇 ${member.name}`}
           >
             <span className="max-w-full truncate">{member.name}</span>

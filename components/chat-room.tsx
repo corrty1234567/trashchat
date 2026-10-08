@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowDown, ArrowLeft, RefreshCw, Search, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, Images, MessageCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import dynamic from "next/dynamic";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AdminSnakeGate } from "@/components/admin-snake-gate";
 import { BrowserChatStatus } from "@/components/browser-chat-status";
@@ -16,6 +17,9 @@ import { PUSHER_EVENT_MESSAGES_CHANGED, PUSHER_EVENT_TYPING_CHANGED, type Messag
 import { connectPrivateRealtime } from "@/lib/pusher-client";
 import { formatMessageTime, getMessageMinuteKey } from "@/lib/time";
 import { getSenderLabel, type Member, type Message, type Sender } from "@/lib/types";
+import { findUnreadBoundary, type UnreadBoundary } from "@/lib/unread-boundary";
+
+const ChatMediaGallery = dynamic(() => import("@/components/chat-media-gallery").then(module => module.ChatMediaGallery), { ssr: false });
 
 type ChatRoomProps = {
   sender: Sender;
@@ -25,8 +29,6 @@ type ChatRoomProps = {
 };
 
 const ADMIN_SENDER_ID = "CHEN";
-const ADMIN_TITLE_TEXT = "trashchat";
-const ADMIN_TITLE_TRIGGER = "chashtrat";
 
 const MESSAGE_FALLBACK_POLLING_INTERVAL_MS = 1000;
 const MESSAGE_REALTIME_HEALTH_CHECK_MS = 60000;
@@ -42,22 +44,6 @@ const JPEG_QUALITIES = [0.82, 0.74, 0.66, 0.58];
 const SEARCH_DEBOUNCE_MS = 250;
 const TYPING_IDLE_MS = 1200;
 const TYPING_EXPIRE_MS = 3200;
-
-type TitleLetter = {
-  id: string;
-  value: string;
-};
-
-function createTitleLetters() {
-  return [...ADMIN_TITLE_TEXT].map((value, index) => ({
-    id: `${value}-${index}`,
-    value
-  }));
-}
-
-function getTitleText(letters: TitleLetter[]) {
-  return letters.map((letter) => letter.value).join("");
-}
 
 function getIsPageActive() {
   return document.visibilityState === "visible" && document.hasFocus();
@@ -194,7 +180,7 @@ async function createThumbnail(file: File) {
   const context = canvas.getContext("2d");
 
   if (!context) {
-    throw new Error("?汗?函蝮桀?蝮桀???");
+    throw new Error("瀏覽器無法產生圖片縮圖。");
   }
 
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
@@ -256,8 +242,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
-  const [titleLetters, setTitleLetters] = useState<TitleLetter[]>(() => createTitleLetters());
   const [isSnakeGateOpen, setIsSnakeGateOpen] = useState(false);
+  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [unreadBoundary, setUnreadBoundary] = useState<UnreadBoundary | null>(null);
+  const capturedUnreadRef = useRef(false);
+  const unreadBoundaryRef = useRef<UnreadBoundary | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [lightboxImages, setLightboxImages] = useState<{ urls: string[]; index: number } | null>(null);
@@ -284,7 +273,6 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   const messageLayoutRef = useRef<MessageLayout>({ offsets: [], heights: [], totalHeight: 0 });
   const pendingScrollAdjustmentRef = useRef(0);
   const userScrollUntilRef = useRef(0);
-  const draggedTitleIndexRef = useRef<number | null>(null);
   const hasMoreOlderMessagesRef = useRef(true);
   const shouldStickToBottomRef = useRef(true);
   const isPinnedToBottomRef = useRef(true);
@@ -303,6 +291,17 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
   useLayoutEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useLayoutEffect(() => { unreadBoundaryRef.current = unreadBoundary; }, [unreadBoundary]);
+
+  useEffect(() => {
+    if (!capturedUnreadRef.current || unreadBoundaryRef.current || (isPageActive && isAtBottom)) return;
+    const boundary = findUnreadBoundary(messages, sender);
+    if (boundary) {
+      unreadBoundaryRef.current = boundary;
+      setUnreadBoundary(boundary);
+    }
+  }, [messages, sender, isPageActive, isAtBottom]);
 
   const syncVirtualViewport = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -438,6 +437,12 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       }
 
       const data = (await response.json()) as { messages: Message[]; hasMore: boolean; realtimeAvailable?: boolean };
+      if (!capturedUnreadRef.current) {
+        capturedUnreadRef.current = true;
+        const boundary = findUnreadBoundary(data.messages, sender);
+        unreadBoundaryRef.current = boundary;
+        setUnreadBoundary(boundary);
+      }
       serverRealtimeAvailableRef.current = data.realtimeAvailable !== false;
       if (!hasCompletedInitialBottomScrollRef.current) hasMoreOlderMessagesRef.current = data.hasMore;
       mergeMessagesIntoState(data.messages);
@@ -453,7 +458,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         loadMessagesPromiseRef.current = null;
       }
     }
-  }, [mergeMessagesIntoState]);
+  }, [mergeMessagesIntoState, sender]);
 
   const loadOlderMessages = useCallback(
     async (beforeMessage?: Message) => {
@@ -484,6 +489,11 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         }
 
         const data = (await response.json()) as { messages: Message[]; hasMore: boolean };
+        if (unreadBoundaryRef.current) {
+          const boundary = findUnreadBoundary(data.messages, sender, unreadBoundaryRef.current);
+          unreadBoundaryRef.current = boundary;
+          setUnreadBoundary(boundary);
+        }
         hasMoreOlderMessagesRef.current = data.hasMore;
         mergeMessagesIntoState(data.messages);
         return data;
@@ -501,7 +511,7 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
         }
       }
     },
-    [mergeMessagesIntoState]
+    [mergeMessagesIntoState, sender]
   );
 
   useEffect(() => {
@@ -1258,91 +1268,38 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
     setEditing(message);
   }
 
-  function moveTitleLetter(fromIndex: number, toIndex: number) {
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) {
-      return;
-    }
-
-    setTitleLetters((currentLetters) => {
-      const nextLetters = [...currentLetters];
-      const [movedLetter] = nextLetters.splice(fromIndex, 1);
-
-      if (!movedLetter) {
-        return currentLetters;
-      }
-
-      nextLetters.splice(toIndex, 0, movedLetter);
-
-      if (sender === ADMIN_SENDER_ID && getTitleText(nextLetters).toLowerCase() === ADMIN_TITLE_TRIGGER) {
-        window.setTimeout(() => {
-          setIsSnakeGateOpen(true);
-          setTitleLetters(createTitleLetters());
-        }, 0);
-      }
-
-      return nextLetters;
-    });
-  }
-
   return (
     <main className="flex h-dvh flex-col bg-paper text-ink">
       <BrowserChatStatus unreadCount={unreadIncomingMessages.length} mentionSender={unreadMentionSender} members={members} />
 
-      <header className="border-b border-line bg-white/95 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+      <header className="relative z-30 border-b border-line bg-white/95 px-3 py-3 backdrop-blur sm:px-5">
+        <div className="mx-auto grid max-w-5xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:gap-4">
           <button
             type="button"
             onClick={onSwitchIdentity}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+            className="icon-button sm:!w-auto sm:gap-2 sm:px-3"
+            title="換身分"
+            aria-label="換身分"
           >
             <ArrowLeft size={17} />
-            換身分
+            <span className="hidden text-sm sm:inline">換身分</span>
           </button>
 
-          <div className="relative min-w-0 text-center">
+          <div className="min-w-0 justify-self-center text-center">
             {sender === ADMIN_SENDER_ID ? (
               <button
                 type="button"
                 onClick={() => setIsSnakeGateOpen(true)}
-                className="absolute inset-x-0 top-0 z-10 h-7 cursor-pointer rounded-sm outline-none focus:ring-4 focus:ring-brand/15"
+                className="inline-flex max-w-full items-center justify-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
                 aria-label="開啟 trashchat"
-              />
-            ) : null}
-            {sender === ADMIN_SENDER_ID ? (
-              <div className="inline-flex justify-center text-lg font-semibold leading-7" aria-label="拖曳 trashchat 字母">
-                {titleLetters.map((letter, index) => (
-                  <span
-                    key={letter.id}
-                    draggable
-                    onDragStart={() => {
-                      draggedTitleIndexRef.current = index;
-                    }}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      const fromIndex = draggedTitleIndexRef.current;
-                      draggedTitleIndexRef.current = null;
-
-                      if (fromIndex !== null) {
-                        moveTitleLetter(fromIndex, index);
-                      }
-                    }}
-                    onDragEnd={() => {
-                      draggedTitleIndexRef.current = null;
-                    }}
-                    className="inline-block cursor-grab select-none text-slate-950 active:cursor-grabbing"
-                  >
-                    {letter.value}
-                  </span>
-                ))}
-              </div>
+              ><Trash2 size={18} className="hidden shrink-0 text-brand sm:block" /><span className="truncate text-lg font-semibold leading-7">trashchat</span></button>
             ) : (
-              <h1 className="truncate text-lg font-semibold">trashchat</h1>
+              <h1 className="flex items-center justify-center gap-2 truncate text-lg font-semibold"><Trash2 size={18} className="hidden shrink-0 text-brand sm:block" />trashchat</h1>
             )}
-            <p className="truncate text-xs text-slate-500">你是 {getSenderLabel(sender, members)}</p>
+            <p className="truncate text-[11px] text-slate-400">你是 <span className="font-medium text-slate-600">{getSenderLabel(sender, members)}</span></p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <button
               type="button"
               onClick={() => {
@@ -1355,16 +1312,19 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
                   setSearchError(null);
                 }
               }}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+              className={`icon-button ${isSearchOpen ? "!bg-brand/10 !text-brand" : ""}`}
+              title="搜尋訊息"
               aria-label="搜尋訊息"
             >
               {isSearchOpen ? <X size={17} /> : <Search size={17} />}
             </button>
+            <button type="button" onClick={() => setIsGalleryOpen(true)} className="icon-button" title="聊天圖片" aria-label="聊天圖片"><Images size={18} /></button>
             <VoiceCall sender={sender} members={members} />
             <button
               type="button"
               onClick={() => void loadMessages()}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-brand/20"
+              className="icon-button hidden sm:inline-flex"
+              title="重新整理"
               aria-label="重新整理"
             >
               <RefreshCw size={17} />
@@ -1440,8 +1400,9 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
               <div className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-brand" />
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center text-center text-sm leading-7 text-slate-500">
-              還沒有訊息。傳送第一則文字或圖片開始對話。
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-sm text-slate-400">
+              <MessageCircle size={34} strokeWidth={1.3} />
+              還沒有訊息
             </div>
           ) : (
             <>
@@ -1457,10 +1418,14 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
                 {virtualMetrics.rows.map(({ message, index }) => {
                   const previousMessage = messages[index - 1];
                   const showTimestamp =
-                    !previousMessage || getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
+                    !previousMessage || previousMessage.sender !== message.sender ||
+                    getMessageMinuteKey(previousMessage.createdAt) !== getMessageMinuteKey(message.createdAt);
+                  const showDay = !previousMessage || new Date(previousMessage.createdAt).toDateString() !== new Date(message.createdAt).toDateString();
 
                   return (
                     <MeasuredMessage key={message.id} messageId={message.id} onHeightChange={handleMessageHeightChange}>
+                      {showDay ? <div className="flex justify-center pb-5 pt-2"><time dateTime={message.createdAt} className="rounded-md bg-white/80 px-3 py-1 text-[11px] font-medium text-slate-400">{new Date(message.createdAt).toLocaleDateString("zh-TW", { month: "numeric", day: "numeric", weekday: "short" })}</time></div> : null}
+                      {unreadBoundary?.id === message.id ? <div role="separator" aria-label="未讀訊息" className="mb-5 mt-2 flex items-center gap-4"><span className="h-px flex-1 bg-brand/20" /><span className="shrink-0 text-[11px] font-semibold text-brand">以下為未讀訊息</span><span className="h-px flex-1 bg-brand/20" /></div> : null}
                       <MessageBubble
                         message={message}
                         currentSender={sender}
@@ -1533,6 +1498,8 @@ export function ChatRoom({ sender, members, onMembersChange, onSwitchIdentity }:
       {isAdminOpen ? (
         <MemberAdminPanel members={members} onMembersChange={onMembersChange} onClose={() => setIsAdminOpen(false)} />
       ) : null}
+
+      {isGalleryOpen ? <ChatMediaGallery members={members} onClose={() => setIsGalleryOpen(false)} /> : null}
 
       {isSnakeGateOpen ? (
         <AdminSnakeGate
